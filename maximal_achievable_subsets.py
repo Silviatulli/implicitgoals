@@ -10,7 +10,7 @@ from typing import Set, Tuple, List, FrozenSet
 import functools
 import time
 import inspect  # Add this at the top of the file
-import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 # Global counters for achievability checks
 achievability_check_count_pruning = 0
