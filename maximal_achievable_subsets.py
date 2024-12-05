@@ -9,10 +9,9 @@ from collections import deque
 from typing import Set, Tuple, List, FrozenSet
 import functools
 import time
-import inspect  # Add this at the top of the file
+import inspect
 from concurrent.futures import ProcessPoolExecutor
 
-# Global counters for achievability checks
 achievability_check_count_pruning = 0
 achievability_check_count_no_pruning = 0
 
