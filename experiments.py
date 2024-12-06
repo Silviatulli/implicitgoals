@@ -4,7 +4,7 @@ from TaxiWorldClass import TaxiWorld
 from MinigridWorldClass import UnlockEnv, UnlockPickupEnv
 from GridWorldClass import generate_and_visualize_gridworld
 from BottleneckCheckMDP import BottleneckMDP
-from QueryMDP import QueryMDP, simulate_policy, simulate_policy_unachievable
+from QueryMDP import QueryMDP, simulate_policy_unachievable, simulate_policy_query_all
 from Utils import vectorized_value_iteration, get_policy, sparse_value_iteration, get_sparse_policy #, debug_value_iteration
 from maximal_achievable_subsets import find_maximally_achievable_subsets, optimized_find_maximally_achievable_subsets, identify_bottlenecks
 import numpy as np
