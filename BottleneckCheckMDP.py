@@ -1,7 +1,12 @@
 from Utils import powerset, ValueIteration, vectorized_value_iteration, get_policy
 from DeterminizedMDP import DeterminizedMDP, identify_bottlenecks
 import random
+from Utils import robust_vectorized_value_iteration
+import inspect
 
+# Global counters for achievability checks
+achievability_check_count_pruning = 0
+achievability_check_count_no_pruning = 0
 
 class BottleneckMDP(object):
     def __init__(self, mdp, bottlenecks):
@@ -82,6 +87,43 @@ class BottleneckMDP(object):
         #print("Missed bottleneck", state_tuple, next_state_tuple)
         return -1000
 
+def check_achievability(I_prime, M_R):
+    """Check if a set of states is achievable in the given MDP."""
+    global achievability_check_count_pruning
+    global achievability_check_count_no_pruning
+    
+    # Identify which function called check_achievability
+    caller = inspect.currentframe().f_back.f_code.co_name
+    if caller == 'find_maximally_achievable_subsets':
+        achievability_check_count_pruning += 1
+    elif caller == 'find_maximally_achievable_subsets_no_pruning':
+        achievability_check_count_no_pruning += 1
+
+    # Original check_achievability implementation
+    M_R.reward_func = None
+    det_mdp = DeterminizedMDP(M_R)
+    det_mdp.reward_func = det_mdp.reward_function_for_goingthrough_all_bottleneck
+    det_mdp.bottleneck_states = I_prime
+
+    V_det = vectorized_value_iteration(det_mdp)
+    initial_state_hash = det_mdp.get_state_hash(det_mdp.get_init_state())
+
+    if V_det[initial_state_hash] <= (len(I_prime)-1)*1000:
+        return False
+
+    M = BottleneckMDP(M_R, I_prime)
+    V = vectorized_value_iteration(M)
+    policy = get_policy(M, V)
+
+    M.reward_func = None
+    det_mdp_for_policy = DeterminizedMDP(M, policy)
+    det_mdp_for_policy.bottleneck_MDP = M
+    det_mdp_for_policy.reward_func = det_mdp_for_policy.reward_function_for_avoiding_all_bottleneck
+
+    V = robust_vectorized_value_iteration(det_mdp_for_policy)
+    initial_state_hash = det_mdp_for_policy.get_state_hash(det_mdp_for_policy.get_init_state())
+
+    return V[initial_state_hash] <= 0
 
 if __name__ == "__main__":
     # from GridWorldClass import generate_and_visualize_gridworld
@@ -142,7 +184,7 @@ if __name__ == "__main__":
         bottleneck_states_human = identify_bottlenecks(M_H)
         # Filter out goal state from bottlenecks
         bottleneck_states_human = [b for b in bottleneck_states_human if b[0] != M_H.goal_pos]
-        achievable_human_bottlenecks = check_bottleneck_achievability(M_R, bottleneck_states_robot,
+        achievable_human_bottlenecks = check_achievability(M_R, bottleneck_states_robot,
                                                                       bottleneck_states_human)
 
         human_models.append(M_H)
