@@ -9,11 +9,10 @@ from collections import deque
 from typing import Set, Tuple, List, FrozenSet
 import functools
 import time
-import inspect
+import inspect  # Add this at the top of the file
 from concurrent.futures import ProcessPoolExecutor
+from BottleneckCheckMDP import check_achievability
 
-achievability_check_count_pruning = 0
-achievability_check_count_no_pruning = 0
 
 def optimized_find_maximally_achievable_subsets(M_R: GridWorld, M_H_list: List[GridWorld]) -> Tuple[Set[FrozenSet], Set[Tuple]]:
     # Identify all bottleneck states
@@ -147,43 +146,7 @@ def identify_bottlenecks(M):
 #     return is_achievable
 
 
-def check_achievability(I_prime, M_R):
-    """Check if a set of states is achievable in the given MDP."""
-    global achievability_check_count_pruning
-    global achievability_check_count_no_pruning
-    
-    # Identify which function called check_achievability
-    caller = inspect.currentframe().f_back.f_code.co_name
-    if caller == 'find_maximally_achievable_subsets':
-        achievability_check_count_pruning += 1
-    elif caller == 'find_maximally_achievable_subsets_no_pruning':
-        achievability_check_count_no_pruning += 1
 
-    # Original check_achievability implementation
-    M_R.reward_func = None
-    det_mdp = DeterminizedMDP(M_R)
-    det_mdp.reward_func = det_mdp.reward_function_for_goingthrough_all_bottleneck
-    det_mdp.bottleneck_states = I_prime
-
-    V_det = vectorized_value_iteration(det_mdp)
-    initial_state_hash = det_mdp.get_state_hash(det_mdp.get_init_state())
-
-    if V_det[initial_state_hash] <= (len(I_prime)-1)*1000:
-        return False
-
-    M = BottleneckMDP(M_R, I_prime)
-    V = vectorized_value_iteration(M)
-    policy = get_policy(M, V)
-
-    M.reward_func = None
-    det_mdp_for_policy = DeterminizedMDP(M, policy)
-    det_mdp_for_policy.bottleneck_MDP = M
-    det_mdp_for_policy.reward_func = det_mdp_for_policy.reward_function_for_avoiding_all_bottleneck
-
-    V = robust_vectorized_value_iteration(det_mdp_for_policy)
-    initial_state_hash = det_mdp_for_policy.get_state_hash(det_mdp_for_policy.get_init_state())
-
-    return V[initial_state_hash] <= 0
 
 def improved_find_maximally_achievable_subsets(M_R, M_H_list):
     B = set()
