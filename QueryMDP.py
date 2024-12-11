@@ -3,6 +3,11 @@ from itertools import combinations
 from Utils import vectorized_value_iteration, get_policy, sparse_value_iteration, get_sparse_policy
 import time
 import random
+import sys
+import threading
+import queue
+import logging
+
 class QueryMDP:
     def __init__(self, robot_mdp: Any, bottlenecks: List[Any], achievable_subsets: List[Any]):
         self.robot_mdp = robot_mdp
@@ -10,7 +15,7 @@ class QueryMDP:
                                    for achievable_subset in achievable_subsets]
         self.union_achievable_subsets = set().union(*self.achievable_subsets) if self.achievable_subsets else set()
 
-        print("Union Achievable Subsets:", self.union_achievable_subsets)
+        #print("Union Achievable Subsets:", self.union_achievable_subsets)
 
         self.bottleneck_hash = set(robot_mdp.get_state_hash(state) for state in bottlenecks)
         self.unachievable_bottlenecks = self.bottleneck_hash - self.union_achievable_subsets
@@ -20,11 +25,17 @@ class QueryMDP:
         self.action_space = []
         
         self.create_state_space()
-        print("State Space:", self.state_space)
+        #logging.info("State Space: %s", self.state_space)
+
         self.create_action_space()
         
         self.start_state = (frozenset(), frozenset())
         self.discount = robot_mdp.discount
+        print_lock = threading.Lock()
+
+        with print_lock:
+            pass
+            #logging.info("State Space: %s", self.state_space)
 
     def create_state_space(self):
         self.state_space = []
@@ -167,7 +178,7 @@ def simulate_policy_query_all(query_mdp: QueryMDP, human_bottlenecks: List[Any],
     
     # Must query EVERY bottleneck regardless of the result
     bottlenecks = list(query_mdp.bottleneck_hash)
-    print(f"Total bottlenecks to query: {len(bottlenecks)}")
+    #print(f"Total bottlenecks to query: {len(bottlenecks)}")
     
     for bottleneck in bottlenecks:
         if query_count >= query_threshold:
