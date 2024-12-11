@@ -5,29 +5,60 @@ import pandas as pd
 from typing import Dict, Any, List, Set, FrozenSet
 import time
 import os
-import random
 import signal
 import sys
 import random
 import itertools
 import inspect
+import sys
+import threading
+import queue
+import logging
+import gc
+import multiprocessing
 
 from experiments import generate_and_visualize_gridworld, generate_and_visualize_puddleworld, generate_and_visualize_rockworld
 from maximal_achievable_subsets import find_maximally_achievable_subsets, find_maximally_achievable_subsets_no_pruning, improved_find_maximally_achievable_subsets
 from QueryMDP import QueryMDP, simulate_policy_unachievable, simulate_policy_query_all
 
+
+def get_safe_process_count():
+    # Use a fraction of available CPUs to be safe with memory
+    cpu_count = multiprocessing.cpu_count()
+    return max(1, cpu_count // 2)  # Use half of available CPUs
+
+
 pruning_counter = Value('i', 0)
 no_pruning_counter = Value('i', 0)
+
+# Create a thread-safe print lock
+print_lock = threading.Lock()
+
+def safe_print(*args, **kwargs):
+    with print_lock:
+        print(*args, **kwargs)
 
 def init_worker():
     """Initialize worker process with required imports"""
     global inspect
     import inspect
 
+# Set up logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('experiment.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 def run_single_experiment(params: Dict[str, Any]):
+    trial_seed = params.get('seed', 0)
+    np.random.seed(trial_seed)
+    random.seed(trial_seed)
     """Run a single experiment with multiple trials to capture variance"""
     try:
-        print(f"Starting experiment with parameters: {params['world_type']}, size={params['grid_size']}, obstacles={params['obstacle_percent']}")
+        #print(f"Starting experiment with parameters: {params['world_type']}, size={params['grid_size']}, obstacles={params['obstacle_percent']}")
         # Extract parameters
         world_type = params['world_type']
         grid_size = params['grid_size']
@@ -59,7 +90,7 @@ def run_single_experiment(params: Dict[str, Any]):
             "query_mdp_state_space_sizes": [],
             "query_mdp_action_space_sizes": []
         }
-        
+        gc.collect()
         # Run multiple trials
         num_trials = 5  # Number of trials for variance
         for trial in range(num_trials):
@@ -184,6 +215,7 @@ def run_single_experiment(params: Dict[str, Any]):
         print(f"Error in run_single_experiment: {str(e)}")
         import traceback
         print(f"Full traceback: {traceback.format_exc()}")
+        gc.collect()
         return None
 
 def run_parallel_experiments_with_obstacles(num_runs: int, num_models: int, grid_sizes: list, 
@@ -191,7 +223,8 @@ def run_parallel_experiments_with_obstacles(num_runs: int, num_models: int, grid
                                     obstacle_percentages: list, max_workers: int = None):
     """Run experiments in parallel for different grid sizes and obstacle percentages."""
     all_environments_results = {}
-    
+    experiment_params = []
+    experiment_counter = 0
     # Create experiment parameters
     experiment_params = []
     for grid_size in grid_sizes:
@@ -225,13 +258,16 @@ def run_parallel_experiments_with_obstacles(num_runs: int, num_models: int, grid
                             'rock_percent': obstacle_percent
                         }
                         experiment_params.append((world_config, params))
-    
+
+ 
     # Run experiments in parallel
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker) as executor:
+    # When creating your process pool:
+    with ProcessPoolExecutor(max_workers=get_safe_process_count()) as executor:
         futures = [executor.submit(run_single_experiment, params) for _, params in experiment_params]
         
         # Collect results
         for i, future in enumerate(futures):
+            result = future.result()
             try:
                 result = future.result()
                 if result:
@@ -377,18 +413,16 @@ if __name__ == "__main__":
     executor = None
     
     def signal_handler(signum, frame):
-        print("\nStopping all processes...")
-        if 'executor' in globals() and executor is not None:
-            executor.shutdown(wait=False)
-        sys.exit(0)
+        with print_lock:
+            print("\nStopping all processes...")
     
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
     
     # Set experiment parameters
     num_runs = 3
-    num_models = 10
-    grid_sizes = [4, 6]
+    num_models = 20
+    grid_sizes = [4]
     query_threshold = 1000
     world_types = ['grid', 'four_rooms', 'puddle', 'rock']
     obstacle_percentages = [0.1]
@@ -399,7 +433,7 @@ if __name__ == "__main__":
         os.makedirs("experiment_results", exist_ok=True)
         
         # Run parallel experiments with different grid sizes and obstacle percentages
-        print("Starting experiments...")
+        #print("Starting experiments...")
         results = run_parallel_experiments_with_obstacles(
             num_runs=num_runs,
             num_models=num_models,
