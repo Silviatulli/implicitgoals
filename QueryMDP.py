@@ -15,8 +15,6 @@ class QueryMDP:
                                    for achievable_subset in achievable_subsets]
         self.union_achievable_subsets = set().union(*self.achievable_subsets) if self.achievable_subsets else set()
 
-        #print("Union Achievable Subsets:", self.union_achievable_subsets)
-
         self.bottleneck_hash = set(robot_mdp.get_state_hash(state) for state in bottlenecks)
         self.unachievable_bottlenecks = self.bottleneck_hash - self.union_achievable_subsets
         self.bottleneck_hash_map = {robot_mdp.get_state_hash(state): state for state in bottlenecks}
@@ -25,7 +23,7 @@ class QueryMDP:
         self.action_space = []
         
         self.create_state_space()
-        #logging.info("State Space: %s", self.state_space)
+        logging.info("State Space: %s", self.state_space)
 
         self.create_action_space()
         
@@ -34,8 +32,7 @@ class QueryMDP:
         print_lock = threading.Lock()
 
         with print_lock:
-            pass
-            #logging.info("State Space: %s", self.state_space)
+            logging.info("State Space: %s", self.state_space)
 
     def create_state_space(self):
         self.state_space = []
@@ -124,6 +121,9 @@ class QueryMDP:
 
 def simulate_policy_unachievable(query_mdp: QueryMDP, human_bottlenecks: List[Any], query_threshold: int = 1000) -> int:
     import random
+    start_time = time.time()
+    V = sparse_value_iteration(query_mdp)
+    policy = get_sparse_policy(query_mdp, V)
     human_bottleneck_hash = frozenset(query_mdp.robot_mdp.get_state_hash(state) for state in human_bottlenecks)
     query_count = 0
     confirmed_subgoals = set()
@@ -145,8 +145,6 @@ def simulate_policy_unachievable(query_mdp: QueryMDP, human_bottlenecks: List[An
             confirmed_non_subgoals.add(unachievable)
     
     # Then use policy for achievable bottlenecks
-    V = sparse_value_iteration(query_mdp)
-    policy = get_sparse_policy(query_mdp, V)
     remaining_bottlenecks = query_mdp.bottleneck_hash - query_mdp.unachievable_bottlenecks - confirmed_subgoals - confirmed_non_subgoals
     
     while remaining_bottlenecks and query_count < query_threshold:
@@ -173,12 +171,14 @@ def simulate_policy_unachievable(query_mdp: QueryMDP, human_bottlenecks: List[An
 
 def simulate_policy_query_all(query_mdp: QueryMDP, human_bottlenecks: List[Any], query_threshold: int = 1000) -> int:
     import random
+    start_time = time.time()
+    V = sparse_value_iteration(query_mdp)
+    policy = get_sparse_policy(query_mdp, V)
     human_bottleneck_hash = frozenset(query_mdp.robot_mdp.get_state_hash(state) for state in human_bottlenecks)
     query_count = 0
     
     # Must query EVERY bottleneck regardless of the result
     bottlenecks = list(query_mdp.bottleneck_hash)
-    #print(f"Total bottlenecks to query: {len(bottlenecks)}")
     
     for bottleneck in bottlenecks:
         if query_count >= query_threshold:
@@ -193,7 +193,7 @@ def simulate_policy_query_all(query_mdp: QueryMDP, human_bottlenecks: List[Any],
             query_count += 1
             is_necessary = random.choice([True, False])
     
-    return query_count  # Should equal total number of bottlenecks + necessity queries
+    return query_count
 
 def test_query_mdp(size=5, obstacles_percent=0.1):
     """Test function for QueryMDP."""
