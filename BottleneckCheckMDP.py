@@ -4,7 +4,7 @@ import random
 from Utils import robust_vectorized_value_iteration
 import inspect
 
-# Global counters for achievability checks
+# global counters for achievability checks
 achievability_check_count_pruning = 0
 achievability_check_count_no_pruning = 0
 

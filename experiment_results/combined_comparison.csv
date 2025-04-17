@@ -1,0 +1,5 @@
+Environment,Grid Size,Number of Human Models,Obstacle Percentage,Finding Bottlenecks Time (s),Finding Maximal Achievable With Pruning (s),Finding Maximal Achievable Without Pruning (s),Computing Policy With Pruning (s),Computing Policy Without Pruning (s),Total Runtime With Pruning (s),Total Runtime Without Pruning (s),Runtime Improvement (%),Human Bottlenecks,Initial State Space,Initial Actions
+grid_5_3_models_0.0,5,3,0.0,2.132 ± 0.050,1.989 ± 0.057,2.069 ± 0.032,N/A,N/A,4.121 ± 0.092,N/A,N/A,0.5 ± 0.5,25,4
+four_rooms_5_3_models_0.0,5,3,0.0,1.922 ± 0.103,2.584 ± 0.131,2.697 ± 0.151,0.014 ± 0.003,0.013 ± 0.003,4.519 ± 0.232,4.631 ± 0.249,2.4 ± 1.1,1.5 ± 0.9,25,4
+puddle_5_3_models_0.0,5,3,0.0,2.067 ± 0.059,1.947 ± 0.029,2.025 ± 0.041,N/A,N/A,4.014 ± 0.081,N/A,N/A,0.5 ± 0.5,25,4
+rock_5_3_models_0.0,5,3,0.0,2.080 ± 0.084,1.951 ± 0.104,2.003 ± 0.085,N/A,N/A,4.031 ± 0.181,N/A,N/A,0.5 ± 0.5,25,4

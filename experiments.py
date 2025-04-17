@@ -279,7 +279,7 @@ def print_results(all_results, num_runs, num_models, grid_size):
 
 def run_all_experiments(num_runs, num_models, grid_size, query_threshold):
     """Run experiments for all world types and collect results"""
-    #world_types = ['grid', 'four_rooms', 'puddle', 'rock']
+    # world_types = ['grid', 'four_rooms', 'puddle', 'rock']
     world_types = ['grid']
     all_results = {}
     

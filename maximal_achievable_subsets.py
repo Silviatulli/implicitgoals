@@ -9,20 +9,20 @@ from collections import deque
 from typing import Set, Tuple, List, FrozenSet
 import functools
 import time
-import inspect  # Add this at the top of the file
+import inspect  # add this at the top of the file
 from concurrent.futures import ProcessPoolExecutor
 from BottleneckCheckMDP import check_achievability
 
 
 def optimized_find_maximally_achievable_subsets(M_R: GridWorld, M_H_list: List[GridWorld]) -> Tuple[Set[FrozenSet], Set[Tuple]]:
-    # Identify all bottleneck states
+    # identify all bottleneck states
     B = set()
     for M in M_H_list:
         B.update(tuple(b) for b in identify_bottlenecks(M))
     
     print(f"Total bottleneck states: {len(B)}")
 
-    # Convert B to a list and create a bit mask for efficient subset generation
+    # convert B to a list and create a bit mask for efficient subset generation
     B_list = list(B)
     n = len(B_list)
 
@@ -41,10 +41,10 @@ def optimized_find_maximally_achievable_subsets(M_R: GridWorld, M_H_list: List[G
                 yield frozenset(current_subset)
             return
 
-        # Don't include this element
+        # don't include this element
         yield from generate_subsets(index + 1, current_subset)
 
-        # Include this element
+        # include this element
         yield from generate_subsets(index + 1, current_subset + (B_list[index],))
 
     I = set(generate_subsets(0, ()))
@@ -52,23 +52,23 @@ def optimized_find_maximally_achievable_subsets(M_R: GridWorld, M_H_list: List[G
     return I, B
 
 def find_maximally_achievable_subsets(M_R, M_H_list):
-    B = set()  # Set of all bottleneck states
+    B = set()  # set of all bottleneck states
     for M in M_H_list:
         bottlenecks = identify_bottlenecks(M)
-        B.update(tuple(b) for b in bottlenecks)  # Convert each bottleneck to a tuple
+        B.update(tuple(b) for b in bottlenecks)  # convert each bottleneck to a tuple
     
     print(f"Total bottleneck states: {len(B)}")
     print("Bottleneck states:", B)
 
-    I = set()  # Set of maximal achievable subgoal sets
-    fringe = [frozenset(B)]  # Start with the set of all bottleneck states
+    I = set()  # set of maximal achievable subgoal sets
+    fringe = [frozenset(B)]  # start with the set of all bottleneck states
     
     while fringe:
         I_prime = fringe.pop(0)
         print(f"\nChecking subset of size {len(I_prime)}: {I_prime}")
         if check_achievability(I_prime, M_R):
             print("Subset is achievable")
-            # Check if I_prime is maximal
+            # check if I_prime is maximal
             if all(not check_achievability(I_prime | {s}, M_R) for s in B - I_prime):
                 I.add(I_prime)
                 print(f"Added maximal achievable subset: {I_prime}")
@@ -183,10 +183,10 @@ def binary_search_maximal_subset(current_set, candidates, M_R):
     test_set = current_set | set(list(candidates)[:mid])
     
     if check_achievability(test_set, M_R):
-        # Try including more states
+        # try including more states
         return binary_search_maximal_subset(test_set, set(list(candidates)[mid:]), M_R)
     else:
-        # Try with fewer states
+        # try with fewer states
         return binary_search_maximal_subset(current_set, set(list(candidates)[:mid]), M_R)
 
 
@@ -219,10 +219,10 @@ def find_maximally_achievable_subsets_no_pruning(M_R, M_H_list):
 if __name__ == "__main__":
     from GridWorldClass import generate_and_visualize_gridworld
 
-    # Generate robot model
+    # generate robot model
     M_R = generate_and_visualize_gridworld(size=4, start=(0,0), goal=(3,3), obstacles_percent=0.1, divide_rooms=True, model_type="Robot Model")
 
-    # Generate human models with different configurations
+    # generate human models with different configurations
     M_H_list = []
     human_configs = [
         {"obstacles_percent": 0.1, "divide_rooms": True},
@@ -239,7 +239,7 @@ if __name__ == "__main__":
         if M_H:
             M_H_list.append(M_H)
 
-    # Proceed with analysis only if we have valid models
+    # proceed with analysis only if we have valid models
     if M_R and M_H_list:
         print("\nRobot Model Initial State:", M_R.get_init_state())
         print("\nActions available in Human Model 1:", M_H_list[0].get_actions())

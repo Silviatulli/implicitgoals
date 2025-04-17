@@ -56,7 +56,16 @@ class DeterminizedMDP(MDP):
                 act_count = current_act_cnt
         self.actions = [action_prefix + str(i) for i in range(act_count)]
     def get_state_hash(self, state):
-        # TODO: Assumption the function is idempotent
+        """Get a unique hash for a state.
+        
+        Args:
+            state: The state to hash. Can be a string or any other type.
+            
+        Returns:
+            str: A string representation of the state that can be used as a hash.
+        """
+        if isinstance(state, str):
+            return state
         return str(state)
     def get_actions(self):
         return self.actions
@@ -139,7 +148,7 @@ if __name__ == "__main__":
     print("Actions:", det_mdp.get_actions())
     print("Initial state:", det_mdp.get_init_state())
 
-    # Identify bottleneck states
+    # identify bottleneck states
     det_mdp.reward_func = det_mdp.bottleneck_reward
     bottleneck_list = []
     for state in det_mdp.get_state_space():
@@ -155,7 +164,7 @@ if __name__ == "__main__":
     print("Actions:", det_mdp2.get_actions())
     print("Initial state:", det_mdp2.get_init_state())
 
-    # Identify bottleneck states for larger grid
+    # identify bottleneck states for larger grid
     det_mdp2.reward_func = det_mdp2.bottleneck_reward
     bottleneck_list2 = []
     for state in det_mdp2.get_state_space():
@@ -165,7 +174,7 @@ if __name__ == "__main__":
             bottleneck_list2.append(state)
     print("Bottleneck states:", bottleneck_list2)
 
-    # Verify determinization
+    # verify determinization
     original_transition = grid.get_transition_probability(((0,0),), 'up', ((0,0),))
     det_transition = det_mdp.get_transition_probability(((0,0),), 'act_0', ((0,0),))
     print(f"Original transition probability: {original_transition}")

@@ -1,0 +1,290 @@
+2025-03-26 16:05:06,572 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 218, in run_single_experiment
+    with pruning_counter.get_lock():
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 154, in improved_find_maximally_achievable_subsets
+    B.update(tuple(b) for b in identify_bottlenecks(M))
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 96, in identify_bottlenecks
+    V = robust_vectorized_value_iteration(det_mdp)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 184, in robust_vectorized_value_iteration
+    print(f"Converged after {iteration + 1} iterations.")
+OSError: [Errno 5] Input/output error
+2025-03-26 16:05:06,572 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+    strategic_count = simulate_policy_unachievable(query_mdp, list(B), query_threshold)
+OSError: [Errno 5] Input/output error
+2025-03-26 16:05:06,784 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 208, in run_single_experiment
+    B = set()
+  File "/home/silvia/Documents/implicit_goals-new_version-1/DeterminizedMDP.py", line 128, in identify_bottlenecks
+    print(f"Identified bottleneck state: {tuple(state)}")
+OSError: [Errno 5] Input/output error
+2025-03-26 16:08:36,789 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 220, in run_single_experiment
+    I_pruning, B = improved_find_maximally_achievable_subsets(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 154, in improved_find_maximally_achievable_subsets
+    B.update(tuple(b) for b in identify_bottlenecks(M))
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 96, in identify_bottlenecks
+    V = robust_vectorized_value_iteration(det_mdp)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 184, in robust_vectorized_value_iteration
+    print(f"Converged after {iteration + 1} iterations.")
+OSError: [Errno 5] Input/output error
+2025-03-26 16:08:36,789 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+    strategic_count = simulate_policy_unachievable(query_mdp, list(B), query_threshold)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/QueryMDP.py", line 125, in simulate_policy_unachievable
+    V = sparse_value_iteration(query_mdp)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 328, in sparse_value_iteration
+    print (f"Time to build the sparse matrix: {time.time() - start_time}")
+OSError: [Errno 5] Input/output error
+2025-03-26 16:08:36,990 - ERROR - Error in run_single_experiment: [Errno 5] Input/output error
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 210, in run_single_experiment
+    B.update(tuple(b) for b in identify_bottlenecks(M))
+  File "/home/silvia/Documents/implicit_goals-new_version-1/DeterminizedMDP.py", line 128, in identify_bottlenecks
+    print(f"Identified bottleneck state: {tuple(state)}")
+OSError: [Errno 5] Input/output error
+2025-03-26 16:27:24,701 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:29:55,961 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:33:57,693 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:38:09,000 - ERROR - Error processing results for grid_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 457, in create_combined_results_table
+    total_pruning = bottleneck_times + pruning_times + policy_pruning_times
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:38:09,000 - ERROR - Error processing results for puddle_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 457, in create_combined_results_table
+    total_pruning = bottleneck_times + pruning_times + policy_pruning_times
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:38:09,001 - ERROR - Error processing results for rock_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 457, in create_combined_results_table
+    total_pruning = bottleneck_times + pruning_times + policy_pruning_times
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:38:09,011 - ERROR - Error during experiment execution: All arrays must be of the same length
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 527, in <module>
+    combined_df = create_combined_results_table(results)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 490, in create_combined_results_table
+    df = pd.DataFrame(combined_data)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/frame.py", line 733, in __init__
+    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy, typ=manager)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 503, in dict_to_mgr
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, typ=typ, consolidate=copy)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 114, in arrays_to_mgr
+    index = _extract_index(arrays)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 677, in _extract_index
+    raise ValueError("All arrays must be of the same length")
+ValueError: All arrays must be of the same length
+2025-03-26 16:47:10,834 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:49:38,786 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:53:38,864 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 16:57:37,395 - ERROR - Error processing results for grid_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 455, in create_combined_results_table
+    total_pruning = arrays['bottleneck_times'] + arrays['pruning_times'] + arrays['policy_pruning_times']
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:57:37,396 - ERROR - Error processing results for puddle_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 455, in create_combined_results_table
+    total_pruning = arrays['bottleneck_times'] + arrays['pruning_times'] + arrays['policy_pruning_times']
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:57:37,396 - ERROR - Error processing results for rock_5_3_models_0.0: operands could not be broadcast together with shapes (15,) (0,) 
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 455, in create_combined_results_table
+    total_pruning = arrays['bottleneck_times'] + arrays['pruning_times'] + arrays['policy_pruning_times']
+ValueError: operands could not be broadcast together with shapes (15,) (0,) 
+2025-03-26 16:57:37,397 - ERROR - Error during experiment execution: All arrays must be of the same length
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 524, in <module>
+    combined_df = create_combined_results_table(results)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 487, in create_combined_results_table
+    df = pd.DataFrame(combined_data)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/frame.py", line 733, in __init__
+    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy, typ=manager)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 503, in dict_to_mgr
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, typ=typ, consolidate=copy)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 114, in arrays_to_mgr
+    index = _extract_index(arrays)
+  File "/home/silvia/.local/lib/python3.10/site-packages/pandas/core/internals/construction.py", line 677, in _extract_index
+    raise ValueError("All arrays must be of the same length")
+ValueError: All arrays must be of the same length
+2025-03-26 17:05:59,613 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 17:08:31,401 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-03-26 17:12:36,987 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 236, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-04-17 14:51:27,881 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-04-17 14:53:49,641 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-04-17 14:57:40,002 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-04-17 15:12:22,078 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+2025-04-17 15:14:42,277 - ERROR - Error in run_single_experiment: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
+Traceback (most recent call last):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/parallel_experiments.py", line 253, in run_single_experiment
+  File "/home/silvia/Documents/implicit_goals-new_version-1/maximal_achievable_subsets.py", line 206, in find_maximally_achievable_subsets_no_pruning
+    if check_achievability(subset, M_R):
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 115, in check_achievability
+    V = vectorized_value_iteration(M)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/Utils.py", line 69, in vectorized_value_iteration
+    R[i, a_idx, j] = mdp.get_reward(s, a, s_next)
+  File "/home/silvia/Documents/implicit_goals-new_version-1/BottleneckCheckMDP.py", line 82, in get_reward
+    if not self.original_mdp.check_goal_reached(next_state[0]):
+AttributeError: 'VisualConstrainedManiSkillEnv' object has no attribute 'check_goal_reached'
