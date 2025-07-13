@@ -16,7 +16,7 @@ class PyBulletPickAndPlaceMDP(MDP):
                  discrete_actions: bool = True,
                  max_steps: int = 100):
         """
-        Initialize PyBullet Pick-and-Place Environment
+        Initialize PyBullet Pick-and-place Environment
         
         Args:
             grid_resolution: Discretization resolution for state space
@@ -43,7 +43,8 @@ class PyBulletPickAndPlaceMDP(MDP):
         self._create_discrete_spaces()
         
         self._define_constraints()
-        
+        self.reward_func = self.get_reward 
+    
     def _connect_pybullet(self):
         """Connect to PyBullet physics engine"""
         try:

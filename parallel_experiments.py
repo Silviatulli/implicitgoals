@@ -318,7 +318,7 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_available_world_types():
     """Get available world types based on platform and dependencies"""
-    base_worlds = ['grid', 'four_rooms', 'puddle', 'rock']
+    base_worlds = []
     
     if PYBULLET_AVAILABLE:
         base_worlds.append('pybullet')
