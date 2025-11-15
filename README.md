@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ## Project Structure
 
 - **MDP Environments**: `GridWorldClass.py`, `PuddleWorldClass.py`, `RockWorldClass.py`, `TaxiWorldClass.py`, `MinigridWorldClass.py`, `ManiskillClass.py`
-- **Core Algorithms**: `MDP.py`, `Utils.py`, `DeterminizedMDP.py`, `BottleneckCheckMDP.py`, `QueryMDP.py`, `Search.py`
+- **Algorithms**: `MDP.py`, `Utils.py`, `DeterminizedMDP.py`, `BottleneckCheckMDP.py`, `QueryMDP.py`, `Search.py`
 - **Analysis Tools**: `maximal_achievable_subsets.py`, `parallel_experiments.py`, `minigrid_tests.py`
 
 ## Key Concepts
