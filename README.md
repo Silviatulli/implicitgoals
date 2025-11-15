@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ## Project Structure
 
 - **MDP Environments**: `GridWorldClass.py`, `PuddleWorldClass.py`, `RockWorldClass.py`, `TaxiWorldClass.py`, `MinigridWorldClass.py`, `ManiskillClass.py`
-- **Algorithms**: `MDP.py`, `Utils.py`, `DeterminizedMDP.py`, `BottleneckCheckMDP.py`, `QueryMDP.py`, `Search.py`
+- **Core Algorithms**: `MDP.py`, `Utils.py`, `DeterminizedMDP.py`, `BottleneckCheckMDP.py`, `QueryMDP.py`, `Search.py`
 - **Analysis Tools**: `maximal_achievable_subsets.py`, `parallel_experiments.py`, `minigrid_tests.py`
 
 ## Key Concepts
@@ -77,11 +77,75 @@ I, B = find_maximally_achievable_subsets(M_R, M_H_list)
 from parallel_experiments import run_parallel_experiments_with_obstacles
 
 results = run_parallel_experiments_with_obstacles(
+    num_runs=3,
     grid_sizes=[10, 15, 20],
-    num_models=[3, 5],
+    human_model_counts=[3, 5],
     world_types=['grid', 'puddle', 'rock'],
-    obstacle_percents=[0.1, 0.15, 0.2],
-    num_trials=5,
+    query_threshold=1000,
+    obstacle_percentages=[0.1, 0.15, 0.2],
+    max_workers=4
+)
+```
+
+## Running Experiments
+Run experiments using the default configuration:
+
+```bash
+python parallel_experiments.py
+```
+
+### Customizing Experiments
+
+Edit the `__main__` block in `parallel_experiments.py` to customize experiment parameters:
+
+```python
+num_runs = 3                    # Number of runs per configuration
+grid_sizes = [4, 6, 8, 10, 12]  # Grid dimensions to test
+human_model_counts = [10, 20]   # Number of human models per experiment
+query_threshold = 1000          # Maximum queries for QueryMDP
+world_types = ['grid', 'four_rooms', 'puddle', 'rock']  # Environment types
+obstacle_percentages = [0.1, 0.15]  # Obstacle density percentages
+max_workers = 2                 # Parallel workers (default: 2-4)
+```
+
+### Experiment Parameters
+
+- **`num_runs`**: Number of independent runs per configuration (default: 3)
+- **`grid_sizes`**: List of grid dimensions to test (e.g., `[4, 6, 8, 10, 12]`)
+- **`human_model_counts`**: Number of human models to generate per experiment (e.g., `[10, 20]`)
+- **`query_threshold`**: Maximum number of queries for QueryMDP learning (default: 1000)
+- **`world_types`**: Environment types - `'grid'`, `'four_rooms'`, `'puddle'`, `'rock'`
+- **`obstacle_percentages`**: Obstacle density as fraction of grid cells (e.g., `[0.1, 0.15, 0.2]`)
+- **`max_workers`**: Number of parallel processes (recommended: 2-4, auto-detected if None)
+
+### Experiment Output
+
+Results are automatically saved to:
+- **`experiment_results/combined_comparison.csv`**: Aggregated results table with metrics
+- **`experiment.log`**: Detailed execution logs and errors
+
+Each experiment configuration runs 5 trials internally (configurable in `run_single_experiment`). Results include:
+- Bottleneck finding times
+- Maximal achievable subset computation times (with/without pruning)
+- Policy computation times
+- Query counts
+- Bottleneck statistics
+- State/action space sizes
+
+### Running Specific Configurations
+
+To run experiments programmatically:
+
+```python
+from parallel_experiments import run_parallel_experiments_with_obstacles
+
+results = run_parallel_experiments_with_obstacles(
+    num_runs=5,
+    grid_sizes=[10, 15],
+    human_model_counts=[5, 10],
+    world_types=['grid', 'puddle'],
+    query_threshold=1000,
+    obstacle_percentages=[0.1, 0.15],
     max_workers=4
 )
 ```
@@ -104,15 +168,9 @@ Environments can be customized by modifying their respective class files:
 - **PuddleWorld**: `puddle_percent`, `puddle_penalty` (inherits from GridWorld)
 - **RockWorld**: `rock_percent`, rock interaction mechanics
 
-## Performance & Troubleshooting
+## Troubleshooting
 
 **Memory Issues**: Use sparse value iteration (`sparse_value_iteration` in `Utils.py`), reduce grid size, or increase epsilon threshold.
 **Large State Spaces**: Sparse implementations are recommended. Parallel processing available for batch experiments.
 **Path Finding Failures**: Increase `max_tries` parameter, reduce obstacle percentage, or adjust start/goal positions.
 **ManiSkill2**: Requires GPU drivers and CUDA. See ManiSkill2 documentation for setup.
-
-## Running Tests
-
-```bash
-python minigrid_tests.py
-```
