@@ -7,7 +7,7 @@ A research codebase for analyzing implicit goals and bottlenecks in Markov Decis
 1. Clone the repository and navigate to the directory:
 ```bash
 git clone <repository-url>
-cd implicit_goals_mdp
+cd implicitgoals
 ```
 
 2. Create a virtual environment (recommended):
