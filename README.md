@@ -171,6 +171,9 @@ Environments can be customized by modifying their respective class files:
 ## Troubleshooting
 
 **Memory Issues**: Use sparse value iteration (`sparse_value_iteration` in `Utils.py`), reduce grid size, or increase epsilon threshold.
+
 **Large State Spaces**: Sparse implementations are recommended. Parallel processing available for batch experiments.
+
 **Path Finding Failures**: Increase `max_tries` parameter, reduce obstacle percentage, or adjust start/goal positions.
+
 **ManiSkill2**: Requires GPU drivers and CUDA. See ManiSkill2 documentation for setup.
