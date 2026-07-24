@@ -493,9 +493,11 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 'seed': random.randint(1, 10000)
                             }
                             experiment_params.append((world_config, params))
+
+    max_workers = min(max_workers or get_safe_process_count(), 3)
     
-    for i in range(0, len(experiment_params), batch_size):
-        batch = experiment_params[i:i + batch_size]
+    batch_size = 6 if PYBULLET_AVAILABLE else 10
+
         
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(run_single_experiment, params) for _, params in batch]
@@ -702,7 +704,7 @@ def main():
     grid_sizes = [4]
     human_model_counts = [3, 4]
     obstacle_percentages = [0.1, 0.15]
-    max_workers = 10
+    max_workers = 3
     query_threshold = 1000
     
 
