@@ -18,14 +18,14 @@ import multiprocessing
 import platform
 
 from experiments import (
-    generate_and_visualize_gridworld, 
-    generate_and_visualize_puddleworld, 
+    generate_and_visualize_gridworld,
+    generate_and_visualize_puddleworld,
     generate_and_visualize_rockworld,
     generate_and_visualize_taxiworld
 )
 from maximal_achievable_subsets import (
-    find_maximally_achievable_subsets, 
-    find_maximally_achievable_subsets_no_pruning, 
+    find_maximally_achievable_subsets,
+    find_maximally_achievable_subsets_no_pruning,
     improved_find_maximally_achievable_subsets
 )
 from QueryMDP import QueryMDP, simulate_policy_unachievable, simulate_policy_query_all
@@ -42,14 +42,10 @@ from overcooked_env import (
     CLIENT_SERVED as OVERCOOKED_CLIENT_SERVED,
 )
 
-IS_MACOS = platform.system() == 'Darwin'
+from overcooked_env import _dominator_bottlenecks
+import networkx as nx
 
-PYBULLET_AVAILABLE = False
-try:
-    from PyBulletMDPClass import PyBulletPickAndPlaceMDP
-    PYBULLET_AVAILABLE = True
-except ImportError:
-    pass
+IS_MACOS = platform.system() == 'Darwin'
 
 def get_safe_process_count():
     cpu_count = multiprocessing.cpu_count()
@@ -60,8 +56,8 @@ def get_safe_process_count():
 
 # Note: on platforms using the 'spawn' start method (macOS, Windows), each worker process
 # re-imports this module and gets its own independent copy of these, not a value truly shared
-# with the main process or other workers. Thus, if a worker increments these counters, it 
-# won't be reflected in the main process. 
+# with the main process or other workers. Thus, if a worker increments these counters, it
+# won't be reflected in the main process.
 pruning_counter = Value('i', 0)
 no_pruning_counter = Value('i', 0)
 print_lock = threading.Lock()
@@ -77,28 +73,93 @@ def init_worker():
 # Minimal logging configuration
 logging.basicConfig(level=logging.ERROR)
 
-def generate_pybullet_model(grid_size, model_num, **kwargs):
-    """Generate PyBullet model for parallel execution"""
-    if not PYBULLET_AVAILABLE:
-        return None
-        
-    try:
-        env = PyBulletPickAndPlaceMDP(
-            grid_resolution=min(grid_size, 4),
-            use_gui=False,
-            discrete_actions=True,
-            max_steps=100
-        )
-        return env
-    except Exception:
-        return None
+def _augment_mdp_to_deterministic(mdp) -> np.ndarray:
+    """
+    Convert stochastic MDP to deterministic by expanding the action space.
+
+    For each state, every (original_action, outcome) pair with positive
+    probability becomes a deterministic augmented action act_0, act_1, ...
+    The augmented action space is shared across states: its size is the max
+    number of outcomes needed by any single state (matching DeterminizedMDP's
+    'act_i' convention), not the sum over all states.
+
+    Returns:
+      next_states[state_idx, act_i] = deterministic next state index,
+      or state_idx itself (self-loop) if act_i isn't defined for that state.
+    """
+    states = mdp.get_state_space()
+    original_actions = mdp.get_actions()
+    n_states = len(states)
+
+    # For each state, list next_state_idx outcomes with positive probability,
+    # in a fixed order -> these become act_0, act_1, ... for that state.
+    per_state_outcomes = []
+    for state in states:
+        outcomes = []
+        for orig_action in original_actions:
+            for next_state_idx, next_state in enumerate(states):
+                if mdp.get_transition_probability(state, orig_action, next_state) > 0:
+                    outcomes.append(next_state_idx)
+        per_state_outcomes.append(outcomes)
+
+    n_augmented_actions = max((len(outcomes) for outcomes in per_state_outcomes), default=0)
+                        # We will overlap the action id but we don't care for bottleeck retrival.
+                        # Much more memory efficient than creating a new action space for each state.
+    next_states = np.tile(np.arange(n_states, dtype=np.int32).reshape(-1, 1), (1, n_augmented_actions))
+    for state_idx, outcomes in enumerate(per_state_outcomes):
+        for act_idx, next_state_idx in enumerate(outcomes):
+            next_states[state_idx, act_idx] = next_state_idx
+
+    state_hashes = [mdp.get_state_hash(s) for s in states]
+    start_idx = state_hashes.index(mdp.get_state_hash(mdp.get_init_state()))
+    goal_idx = state_hashes.index(mdp.get_state_hash(mdp.get_goal_states()[0]))
+
+    return next_states, start_idx, goal_idx
+
+def extract_bottlenecks(T_R, T_H_list, start_state, goal_state, verbose=True):
+    """Extract mandatory bottleneck states from a single transition matrix.
+
+    Builds a directed graph from T, runs the dominator tree from start_state,
+    and collects every state that lies on every path to any target state.
+
+    Parameters
+    ----------
+    T_R            : ndarray, shape (n_states, n_actions)  robot transition matrix
+    T_H_list       : list[ndarray], shape (n_states, n_actions)  human transition matrices
+    start_state    : int  index of the start state
+    goal_state     : int  index of the goal state
+    verbose        : bool
+
+    Returns
+    -------
+    list[int]  sorted bottleneck state IDs, always includes absorbing_state
+    """
+    G = nx.DiGraph()
+    for state in range(T_R.shape[0]):
+        for action in range(T_R.shape[1]):
+            nxt = int(T_R[state, action])
+            if nxt != state:
+                G.add_edge(state, nxt)
+    bottlenecks = {goal_state} | _dominator_bottlenecks(G, start_state, [goal_state])
+    for T_H in T_H_list:
+        for state in range(T_H.shape[0]):
+            for action in range(T_H.shape[1]):
+                nxt = int(T_H[state, action])
+                if nxt != state:
+                    G.add_edge(state, nxt)
+        bottlenecks |= _dominator_bottlenecks(G, start_state, [goal_state])
+    result = sorted(bottlenecks)
+    if verbose:
+        print(f"Found {len(result)} bottleneck states via dominator tree.")
+    return result
+
 
 def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent, rock_percent, model_num, divide_rooms=False):
     M_H = None
-    
+
     try:
         if world_type == 'grid' or world_type == 'four_rooms':
-            M_H = generate_and_visualize_gridworld(
+            mdp = generate_and_visualize_gridworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -107,8 +168,12 @@ def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type=f"Human Model {model_num}",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_H = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'puddle':
-            M_H = generate_and_visualize_puddleworld(
+            mdp = generate_and_visualize_puddleworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -117,8 +182,12 @@ def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type=f"Human Model {model_num}",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_H = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'rock':
-            M_H = generate_and_visualize_rockworld(
+            mdp = generate_and_visualize_rockworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -127,8 +196,12 @@ def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type=f"Human Model {model_num}",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_H = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'taxi':
-            M_H = generate_and_visualize_taxiworld(
+            mdp = generate_and_visualize_taxiworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -136,19 +209,21 @@ def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type=f"Human Model {model_num}",
                 obstacle_seed=random.randint(1, 10000)
             )
-        elif world_type == 'pybullet':
-            M_H = generate_pybullet_model(grid_size, model_num)
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_H = (next_states, start_idx, goal_idx, det_time)
     except Exception:
         pass
-        
+
     return M_H
 
 def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent, rock_percent, divide_rooms=False):
     M_R = None
-    
+
     try:
         if world_type == 'grid' or world_type == 'four_rooms':
-            M_R = generate_and_visualize_gridworld(
+            mdp = generate_and_visualize_gridworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -157,8 +232,12 @@ def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type="Robot Model",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_R = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'puddle':
-            M_R = generate_and_visualize_puddleworld(
+            mdp = generate_and_visualize_puddleworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -167,8 +246,12 @@ def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type="Robot Model",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_R = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'rock':
-            M_R = generate_and_visualize_rockworld(
+            mdp = generate_and_visualize_rockworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -177,8 +260,12 @@ def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type="Robot Model",
                 obstacle_seed=random.randint(1, 10000)
             )
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_R = (next_states, start_idx, goal_idx, det_time)
         elif world_type == 'taxi':
-            M_R = generate_and_visualize_taxiworld(
+            mdp = generate_and_visualize_taxiworld(
                 size=grid_size,
                 start=(0,0),
                 goal=(grid_size-1,grid_size-1),
@@ -186,22 +273,33 @@ def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent
                 model_type="Robot Model",
                 obstacle_seed=random.randint(1, 10000)
             )
-        elif world_type == 'pybullet':
-            M_R = generate_pybullet_model(grid_size, "Robot")
+            det_t0 = time.time()
+            next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+            det_time = time.time() - det_t0
+            M_R = (next_states, start_idx, goal_idx, det_time)
     except Exception:
         pass
-        
+
     return M_R
 
-def cleanup_pybullet_models(models):
-    for model in models:
-        if hasattr(model, 'close'):
-            try:
-                model.close()
-            except:
-                pass 
+def build_overcooked_models():
+    """Robot model (all recipes servable) + one human model per recipe (only that recipe servable)."""
+    T_base, RECIPES, _ = overcooked_build_transition_matrix(verbose=False)
 
-def run_overcooked_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
+    T_R = T_base.copy()
+    for r in RECIPES:
+        T_R[r * OVERCOOKED_NUM_POT, OVERCOOKED_SERVE_ACTION] = OVERCOOKED_CLIENT_SERVED
+
+    T_H_list = []
+    for r in RECIPES:
+        T_H = T_base.copy()
+        T_H[r * OVERCOOKED_NUM_POT, OVERCOOKED_SERVE_ACTION] = OVERCOOKED_CLIENT_SERVED
+        T_H_list.append(T_H)
+
+    return T_R, T_H_list
+
+
+def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str, Any]:
     """
     Overcooked (no-move) pipeline — deterministic, no grid/obstacles, so unlike
     the grid-family games, repeating trials only measures timing noise (mirrors
@@ -209,8 +307,13 @@ def run_overcooked_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
     for this domain (solving the unfiltered 56-bottleneck Query MDP would need
     3^56 states), so the no-pruning columns are filled with the pruned numbers,
     matching notebook 9.
+
+    determinizing_mdp_time is measured once by the caller (build_overcooked_models
+    is deterministic, so there's nothing to re-measure per trial) and replicated
+    across trials here so the array lengths match the other timing arrays.
     """
     results = {
+        "determinizing_mdp_times": [],
         "bottleneck_finding_times": [],
         "maximal_achievable_pruning_times": [],
         "maximal_achievable_no_pruning_times": [],
@@ -225,14 +328,10 @@ def run_overcooked_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
         "initial_mdp_action_space_sizes": [],
     }
 
-    T_base, RECIPES, _ = overcooked_build_transition_matrix(verbose=False)
-    T_R = T_base.copy()
-    for r in RECIPES:
-        T_R[r * OVERCOOKED_NUM_POT, OVERCOOKED_SERVE_ACTION] = OVERCOOKED_CLIENT_SERVED
-
     num_trials = 3 if IS_MACOS else 5
 
     for _ in range(num_trials):
+        results["determinizing_mdp_times"].append(determinizing_mdp_time)
         results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
         results["initial_mdp_action_space_sizes"].append(T_R.shape[1])
 
@@ -272,12 +371,13 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
     trial_seed = params.get('seed', 0)
     np.random.seed(trial_seed)
     random.seed(trial_seed)
-    
+
     try:
         world_type = params['world_type']
 
         if world_type == 'overcooked':
-            return run_overcooked_experiment(params)
+            T_R_overcooked, T_H_list_overcooked = build_overcooked_models()
+            return run_overcooked_experiment(T_R_overcooked, T_H_list_overcooked, 0)
 
         grid_size = params['grid_size']
         num_models = params['num_models']
@@ -285,42 +385,26 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
         obstacle_percent = params['obstacle_percent']
         puddle_percent = params.get('puddle_percent', 0)
         rock_percent = params.get('rock_percent', 0)
-        
-        results = {
-            "bottleneck_finding_times": [],
-            "maximal_achievable_pruning_times": [],
-            "maximal_achievable_no_pruning_times": [],
-            "policy_computation_pruning_times": [],
-            "policy_computation_no_pruning_times": [],
-            "pruning": {"times": [], "checks": [], "subsets": []},
-            "no_pruning": {"times": [], "checks": [], "subsets": []},
-            "query_counts": [],
-            "query_all_counts": [],
-            "human_bottlenecks": [],
-            "initial_mdp_state_space_sizes": [],
-            "initial_mdp_action_space_sizes": [],
-        }
-        
-        if world_type == 'pybullet':
-            num_trials = 2 if IS_MACOS else 3
-        else:
-            num_trials = 3 if IS_MACOS else 5
-        
+
+
+        num_trials = 3 if IS_MACOS else 5
+
         for trial in range(num_trials):
-            M_R = generate_robot_model(
+
+            M_R, start_state, goal_state, determinizing_time = generate_robot_model(
                 world_type=world_type,
                 grid_size=grid_size,
                 obstacle_percent=obstacle_percent,
                 puddle_percent=puddle_percent,
                 rock_percent=rock_percent
             )
-            
-            if not M_R:
+
+            if M_R is None:
                 continue
-                
+
             M_H_list = []
             for i in range(num_models):
-                M_H = generate_human_model(
+                M_H, _, _, human_det_time = generate_human_model(
                     world_type=world_type,
                     grid_size=grid_size,
                     obstacle_percent=obstacle_percent,
@@ -328,76 +412,64 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                     rock_percent=rock_percent,
                     model_num=i+1
                 )
-                if M_H:
+                if M_H is not None:
                     M_H_list.append(M_H)
-            
-            if not M_H_list:
-                if world_type == 'pybullet':
-                    cleanup_pybullet_models([M_R])
-                continue
-            
-            results["initial_mdp_state_space_sizes"].append(len(M_R.state_space))
-            results["initial_mdp_action_space_sizes"].append(len(M_R.get_actions()))
-            
-            start_time = time.time()
-            B = set()
-            for M in M_H_list:
-                B.update(tuple(b) for b in identify_bottlenecks(M))
-            bottleneck_finding_time = time.time() - start_time    
-            results["bottleneck_finding_times"].append(bottleneck_finding_time)
-            results["human_bottlenecks"].append(len(B))
-            
-            with pruning_counter.get_lock():
-                start_time = time.time()
-                I_pruning, B = improved_find_maximally_achievable_subsets(M_R, M_H_list)
-                maximal_achievable_pruning_time = time.time() - start_time
-                check_count = pruning_counter.value
-                pruning_counter.value = 0
+                    determinizing_time += human_det_time
 
-                results["maximal_achievable_pruning_times"].append(maximal_achievable_pruning_time)
-                results["pruning"]["times"].append(maximal_achievable_pruning_time)
-                results["pruning"]["checks"].append(check_count)
-                results["pruning"]["subsets"].append(len(I_pruning))
-            
-            if len(B) <= 12:
-                with no_pruning_counter.get_lock():
-                    start_time = time.time()
-                    I_no_pruning, _ = find_maximally_achievable_subsets_no_pruning(M_R, M_H_list)
-                    maximal_achievable_no_pruning_time = time.time() - start_time
-                    check_count = no_pruning_counter.value
-                    no_pruning_counter.value = 0
-                    
-                    results["maximal_achievable_no_pruning_times"].append(maximal_achievable_no_pruning_time)
-                    results["no_pruning"]["times"].append(maximal_achievable_no_pruning_time)
-                    results["no_pruning"]["checks"].append(check_count)
-                    results["no_pruning"]["subsets"].append(len(I_no_pruning))
-            
-            if len(B) > 0:
-                try:
-                    query_mdp = QueryMDP(M_R, list(B), list(I_pruning))
-                    
-                    start_time = time.time()
-                    strategic_count = simulate_policy_unachievable(query_mdp, list(B), query_threshold)
-                    policy_pruning_time = time.time() - start_time
-                    results["policy_computation_pruning_times"].append(policy_pruning_time)
-                    results["query_counts"].append(strategic_count)
-                    
-                    start_time = time.time()
-                    query_all_count = simulate_policy_query_all(query_mdp, list(B), query_threshold)
-                    policy_no_pruning_time = time.time() - start_time
-                    results["policy_computation_no_pruning_times"].append(policy_no_pruning_time)
-                    results["query_all_counts"].append(query_all_count)
-                    
-                except Exception:
-                    pass
-            
-            if world_type == 'pybullet':
-                cleanup_pybullet_models([M_R] + M_H_list)
-            
+
+            results = {
+                "determinizing_mdp_times": [],
+                "bottleneck_finding_times": [],
+                "maximal_achievable_pruning_times": [],
+                "maximal_achievable_no_pruning_times": [],
+                "policy_computation_pruning_times": [],
+                "policy_computation_no_pruning_times": [],
+                "pruning": {"times": [], "checks": [], "subsets": []},
+                "no_pruning": {"times": [], "checks": [], "subsets": []},
+                "query_counts": [],
+                "query_all_counts": [],
+                "human_bottlenecks": [],
+                "initial_mdp_state_space_sizes": [],
+                "initial_mdp_action_space_sizes": [],
+            }
+
+            results["determinizing_mdp_times"].append(determinizing_time)
+            results["initial_mdp_state_space_sizes"].append(M_R.shape[0])
+            results["initial_mdp_action_space_sizes"].append(M_R.shape[1])
+
+            t0 = time.time()
+            B = extract_bottlenecks(M_R, M_H_list, start_state, goal_state, verbose=False)
+            t1 = time.time()
+
+            I = overcooked_find_maximally_achievable_subsets(B, M_R)
+            I_decoded = [[(s,) for s in subset] for subset in I]
+            t2 = time.time()
+
+            overcooked_solve_query_mdp_exact(I_decoded)
+            t3 = time.time()
+
+            bottleneck_time = t1 - t0
+            maximal_time    = t2 - t1
+            policy_time     = t3 - t2
+
+            results["bottleneck_finding_times"].append(bottleneck_time)
+            results["maximal_achievable_pruning_times"].append(maximal_time)
+            results["maximal_achievable_no_pruning_times"].append(maximal_time)
+            results["pruning"]["times"].append(maximal_time)
+            results["pruning"]["subsets"].append(len(I))
+            results["no_pruning"]["times"].append(maximal_time)
+            results["no_pruning"]["subsets"].append(len(I))
+            results["policy_computation_pruning_times"].append(policy_time)
+            results["policy_computation_no_pruning_times"].append(policy_time)
+            results["human_bottlenecks"].append(len(B))
+
             gc.collect()
-        
-        return results
-        
+
+
+
+
+            return results
+
     except Exception as e:
         logging.error(f"Error in run_single_experiment ({world_type}): {str(e)}")
         return None
@@ -406,18 +478,15 @@ def get_available_world_types():
     """Get available world types based on platform and dependencies"""
     base_worlds = ['grid', 'puddle', 'rock', 'overcooked']
 
-    if PYBULLET_AVAILABLE and False:
-        base_worlds.append('pybullet')
-
     if not IS_MACOS:
         base_worlds.append('taxi')
 
     return base_worlds
 
-def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list, 
-                                         human_model_counts: list, 
-                                         query_threshold: int, 
-                                         obstacle_percentages: list, 
+def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
+                                         human_model_counts: list,
+                                         query_threshold: int,
+                                         obstacle_percentages: list,
                                          max_workers: int = None):
     world_types = get_available_world_types()
 
@@ -426,11 +495,11 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
 
     max_workers = max_workers or get_safe_process_count()
     batch_size = max(max_workers, 6 if PYBULLET_AVAILABLE else 10)
-    
+
     for grid_size in grid_sizes:
         for num_models in human_model_counts:
             for world_type in world_types:
-                
+
                 if world_type == 'four_rooms':
                     world_config = f"{world_type}_{grid_size}_{num_models}_models_0.0"
                     for _ in range(num_runs):
@@ -445,7 +514,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                             'seed': random.randint(1, 10000)
                         }
                         experiment_params.append((world_config, params))
-                        
+
                 elif world_type == 'overcooked':
                     # No grid, no obstacles — grid_size/obstacle_percent don't apply.
                     world_config = f"{world_type}_{grid_size}_{num_models}_models_nomove"
@@ -468,8 +537,8 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                     for _ in range(pybullet_runs):
                         params = {
                             'world_type': world_type,
-                            'grid_size': min(grid_size, 4),  
-                            'num_models': min(num_models, 8),  
+                            'grid_size': min(grid_size, 4),
+                            'num_models': min(num_models, 8),
                             'query_threshold': query_threshold,
                             'obstacle_percent': 0.1,
                             'puddle_percent': 0.0,
@@ -477,7 +546,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                             'seed': random.randint(1, 10000)
                         }
                         experiment_params.append((world_config, params))
-                        
+
                 else:
                     for obstacle_percent in obstacle_percentages:
                         world_config = f"{world_type}_{grid_size}_{num_models}_models_{obstacle_percent}"
@@ -495,13 +564,13 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                             experiment_params.append((world_config, params))
 
     max_workers = min(max_workers or get_safe_process_count(), 3)
-    
+
     batch_size = 6 if PYBULLET_AVAILABLE else 10
 
-        
+    for batch in [experiment_params[i:i+batch_size] for i in range(0, len(experiment_params), batch_size)]:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(run_single_experiment, params) for _, params in batch]
-            
+
             for j, future in enumerate(futures):
                 try:
                     result = future.result(timeout=300)
@@ -509,6 +578,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                         world_config = batch[j][0]
                         if world_config not in all_environments_results:
                             all_environments_results[world_config] = {
+                                "determinizing_mdp_times": [],
                                 "bottleneck_finding_times": [],
                                 "maximal_achievable_pruning_times": [],
                                 "maximal_achievable_no_pruning_times": [],
@@ -522,7 +592,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 "initial_mdp_state_space_sizes": [],
                                 "initial_mdp_action_space_sizes": [],
                             }
-                        
+
                         # Aggregate results
                         for key in result:
                             if isinstance(result[key], dict):
@@ -530,25 +600,26 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                     all_environments_results[world_config][key][subkey].extend(result[key][subkey])
                             else:
                                 all_environments_results[world_config][key].extend(result[key])
-                                
+
                 except Exception:
                     continue
-        
+
         gc.collect()
-    
+
     return all_environments_results
 
-def create_enhanced_results_table(all_environments_results, output_file="experiment_results/pybullet_comparison.csv"):
+def create_enhanced_results_table(all_environments_results, output_file="experiment_results_2/pybullet_comparison.csv"):
     """Create enhanced results table including PyBullet results"""
-    
-    os.makedirs("experiment_results", exist_ok=True)
-    
+
+    os.makedirs("experiment_results_2", exist_ok=True)
+
     combined_data = {
         'Environment': [],
         'Grid Size': [],
         'Number of Human Models': [],
         'Obstacle Percentage': [],
-        'Environment Type': [], 
+        'Environment Type': [],
+        'Determinizing MDP Time (s)': [],
         'Finding Bottlenecks Time (s)': [],
         'Finding Maximal Achievable With Pruning (s)': [],
         'Finding Maximal Achievable Without Pruning (s)': [],
@@ -561,13 +632,13 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
         'Initial State Space': [],
         'Initial Actions': []
     }
-    
+
     for env_type, results in all_environments_results.items():
         if not results["pruning"]["times"]:
             continue
-            
+
         env_parts = env_type.split('_')
-        
+
         if "pybullet" in env_type:
             environment_name = "PyBullet"
             env_category = "3D Physics"
@@ -592,41 +663,45 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             grid_size = int(env_parts[1])
             num_models = int(env_parts[2])
             obstacle_percent = float(env_parts[-1])
-        
+
         combined_data['Environment'].append(environment_name)
         combined_data['Environment Type'].append(env_category)
         combined_data['Grid Size'].append(grid_size)
         combined_data['Number of Human Models'].append(num_models)
         combined_data['Obstacle Percentage'].append(obstacle_percent)
-        
+
         try:
+            determinizing_times = np.array(results.get('determinizing_mdp_times', []))
             bottleneck_times = np.array(results.get('bottleneck_finding_times', []))
             pruning_times = np.array(results["pruning"]["times"])
             policy_pruning_times = np.array(results.get('policy_computation_pruning_times', []))
             no_pruning_times = np.array(results["no_pruning"]["times"]) if results["no_pruning"]["times"] else []
             policy_no_pruning_times = np.array(results.get('policy_computation_no_pruning_times', []))
-            
+
             min_len = min(len(arr) for arr in [bottleneck_times, pruning_times, policy_pruning_times] if len(arr) > 0)
-            
+
             if min_len == 0:
                 continue
-                
+
+            determinizing_times = determinizing_times[:min_len] if len(determinizing_times) > 0 else np.zeros(min_len)
             bottleneck_times = bottleneck_times[:min_len]
             pruning_times = pruning_times[:min_len]
             policy_pruning_times = policy_pruning_times[:min_len]
-            
+
+            combined_data['Determinizing MDP Time (s)'].append(
+                f"{np.mean(determinizing_times):.3f} ± {np.std(determinizing_times):.3f}")
             combined_data['Finding Bottlenecks Time (s)'].append(
                 f"{np.mean(bottleneck_times):.3f} ± {np.std(bottleneck_times):.3f}")
             combined_data['Finding Maximal Achievable With Pruning (s)'].append(
                 f"{np.mean(pruning_times):.3f} ± {np.std(pruning_times):.3f}")
-            
+
             if len(no_pruning_times) > 0:
                 no_pruning_times = no_pruning_times[:min_len]
                 combined_data['Finding Maximal Achievable Without Pruning (s)'].append(
                     f"{np.mean(no_pruning_times):.3f} ± {np.std(no_pruning_times):.3f}")
             else:
                 combined_data['Finding Maximal Achievable Without Pruning (s)'].append("N/A")
-            
+
             if len(policy_pruning_times) > 0 and np.any(policy_pruning_times > 0):
                 combined_data['Computing Policy With Pruning (s)'].append(
                     f"{np.mean(policy_pruning_times):.3f} ± {np.std(policy_pruning_times):.3f}")
@@ -640,16 +715,16 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             else:
                 combined_data['Computing Policy Without Pruning (s)'].append("N/A")
 
-            total_pruning = bottleneck_times + pruning_times + policy_pruning_times
+            total_pruning = determinizing_times + bottleneck_times + pruning_times + policy_pruning_times
             combined_data['Total Runtime With Pruning (s)'].append(
                 f"{np.mean(total_pruning):.3f} ± {np.std(total_pruning):.3f}")
-            
+
             if len(no_pruning_times) > 0 and len(policy_no_pruning_times) > 0:
-                total_no_pruning = bottleneck_times + no_pruning_times + policy_no_pruning_times
+                total_no_pruning = determinizing_times + bottleneck_times + no_pruning_times + policy_no_pruning_times
                 combined_data['Total Runtime Without Pruning (s)'].append(
                     f"{np.mean(total_no_pruning):.3f} ± {np.std(total_no_pruning):.3f}")
-                
-                improvement = ((np.mean(total_no_pruning) - np.mean(total_pruning)) / 
+
+                improvement = ((np.mean(total_no_pruning) - np.mean(total_pruning)) /
                              np.mean(total_no_pruning) * 100)
                 improvement_std = np.std([(n - p)/n * 100 for n, p in zip(total_no_pruning, total_pruning)])
                 combined_data['Runtime Improvement (%)'].append(
@@ -657,7 +732,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             else:
                 combined_data['Total Runtime Without Pruning (s)'].append("N/A")
                 combined_data['Runtime Improvement (%)'].append("N/A")
-            
+
             bottlenecks = np.array(results['human_bottlenecks'][:min_len])
             combined_data['Human Bottlenecks'].append(
                 f"{np.mean(bottlenecks):.1f} ± {np.std(bottlenecks):.1f}")
@@ -665,19 +740,19 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
                 f"{np.mean(results['initial_mdp_state_space_sizes'][:min_len]):.0f}")
             combined_data['Initial Actions'].append(
                 f"{np.mean(results['initial_mdp_action_space_sizes'][:min_len]):.0f}")
-                
+
         except Exception as e:
             logging.error(f"Error processing results for {env_type}: {str(e)}")
             continue
-    
+
     df = pd.DataFrame(combined_data)
     df.to_csv(output_file, index=False)
-    
+
     pybullet_results = df[df['Environment Type'] == '3D Physics']
     if not pybullet_results.empty:
         pybullet_file = output_file.replace('.csv', '_pybullet_only.csv')
         pybullet_results.to_csv(pybullet_file, index=False)
-    
+
     backup_file = output_file.replace('.csv', '_detailed_backup.csv')
     detailed_data = []
     for env_type, results in all_environments_results.items():
@@ -692,11 +767,11 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
                     if i < len(values):
                         row[key] = values[i]
             detailed_data.append(row)
-    
+
     if detailed_data:
         detailed_df = pd.DataFrame(detailed_data)
         detailed_df.to_csv(backup_file, index=False)
-    
+
     return df
 
 def main():
@@ -706,13 +781,11 @@ def main():
     obstacle_percentages = [0.1, 0.15]
     max_workers = 3
     query_threshold = 1000
-    
 
-    
     try:
         # Create results directory
-        os.makedirs("experiment_results", exist_ok=True)
-        
+        os.makedirs("experiment_results_2", exist_ok=True)
+
         # Run experiments
         start_time = time.time()
         results = run_parallel_experiments_with_pybullet(
@@ -724,36 +797,37 @@ def main():
             max_workers=max_workers
         )
         total_time = time.time() - start_time
-        
+
         if results:
             combined_df = create_enhanced_results_table(
-                results, 
-                "experiment_results/enhanced_pybullet_comparison.csv"
+                results,
+                "experiment_results_2/enhanced_pybullet_comparison.csv"
             )
-            
-            print(f"\nResults saved to experiment_results/")
+
+            print(f"\nResults saved to experiment_results_2/")
             print(f"Environments tested: {len(results)}")
             print(f"Total runtime: {total_time/60:.1f} minutes")
-            
+
             if not combined_df.empty:
                 print(f"\nSummary:")
                 for env_type in combined_df['Environment Type'].unique():
                     env_data = combined_df[combined_df['Environment Type'] == env_type]
                     print(f"  {env_type}: {len(env_data)} configurations")
-            
+
             print("Experiment completed successfully!")
-            
+
         else:
             print("No results were generated.")
-            
+
     except Exception as e:
         print(f"Error during experiment execution: {str(e)}")
         if 'results' in locals() and results:
             try:
-                create_enhanced_results_table(results, "experiment_results/partial_results.csv")
-                print("Partial results saved to experiment_results/partial_results.csv")
+                create_enhanced_results_table(results, "experiment_results_2/partial_results.csv")
+                print("Partial results saved to experiment_results_2/partial_results.csv")
             except:
                 pass
 
 if __name__ == "__main__":
+    PYBULLET_AVAILABLE = False
     main()
