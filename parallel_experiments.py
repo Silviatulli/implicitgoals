@@ -30,6 +30,17 @@ from maximal_achievable_subsets import (
 )
 from QueryMDP import QueryMDP, simulate_policy_unachievable, simulate_policy_query_all
 from DeterminizedMDP import identify_bottlenecks
+from overcooked_env import (
+    build_transition_matrix_nomove as overcooked_build_transition_matrix,
+    extract_bottlenecks_nomove as overcooked_extract_bottlenecks,
+    remove_toboggan_redundancies as overcooked_remove_toboggan_redundancies,
+    find_maximally_achievable_subsets as overcooked_find_maximally_achievable_subsets,
+    decode_subsets_to_2d_nomove as overcooked_decode_subsets_to_2d_nomove,
+    solve_query_mdp_exact as overcooked_solve_query_mdp_exact,
+    NUM_POT as OVERCOOKED_NUM_POT,
+    SERVE_ACTION as OVERCOOKED_SERVE_ACTION,
+    CLIENT_SERVED as OVERCOOKED_CLIENT_SERVED,
+)
 
 IS_MACOS = platform.system() == 'Darwin'
 
@@ -47,6 +58,10 @@ def get_safe_process_count():
     else:
         return max(1, cpu_count // 2)
 
+# Note: on platforms using the 'spawn' start method (macOS, Windows), each worker process
+# re-imports this module and gets its own independent copy of these, not a value truly shared
+# with the main process or other workers. Thus, if a worker increments these counters, it 
+# won't be reflected in the main process. 
 pruning_counter = Value('i', 0)
 no_pruning_counter = Value('i', 0)
 print_lock = threading.Lock()
@@ -186,6 +201,73 @@ def cleanup_pybullet_models(models):
             except:
                 pass 
 
+def run_overcooked_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Overcooked (no-move) pipeline — deterministic, no grid/obstacles, so unlike
+    the grid-family games, repeating trials only measures timing noise (mirrors
+    notebook 9's N_REPEATS). There is no tractable "without pruning" alternative
+    for this domain (solving the unfiltered 56-bottleneck Query MDP would need
+    3^56 states), so the no-pruning columns are filled with the pruned numbers,
+    matching notebook 9.
+    """
+    results = {
+        "bottleneck_finding_times": [],
+        "maximal_achievable_pruning_times": [],
+        "maximal_achievable_no_pruning_times": [],
+        "policy_computation_pruning_times": [],
+        "policy_computation_no_pruning_times": [],
+        "pruning": {"times": [], "checks": [], "subsets": []},
+        "no_pruning": {"times": [], "checks": [], "subsets": []},
+        "query_counts": [],
+        "query_all_counts": [],
+        "human_bottlenecks": [],
+        "initial_mdp_state_space_sizes": [],
+        "initial_mdp_action_space_sizes": [],
+    }
+
+    T_base, RECIPES, _ = overcooked_build_transition_matrix(verbose=False)
+    T_R = T_base.copy()
+    for r in RECIPES:
+        T_R[r * OVERCOOKED_NUM_POT, OVERCOOKED_SERVE_ACTION] = OVERCOOKED_CLIENT_SERVED
+
+    num_trials = 3 if IS_MACOS else 5
+
+    for _ in range(num_trials):
+        results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
+        results["initial_mdp_action_space_sizes"].append(T_R.shape[1])
+
+        t0 = time.time()
+        B = overcooked_extract_bottlenecks([T_R], verbose=False)
+        B_filter = overcooked_remove_toboggan_redundancies(T_R, B)
+        t1 = time.time()
+
+        I = overcooked_find_maximally_achievable_subsets(B_filter, T_R)
+        I_decoded = overcooked_decode_subsets_to_2d_nomove(I)
+        t2 = time.time()
+
+        overcooked_solve_query_mdp_exact(I_decoded)
+        t3 = time.time()
+
+        bottleneck_time = t1 - t0
+        maximal_time    = t2 - t1
+        policy_time     = t3 - t2
+
+        results["bottleneck_finding_times"].append(bottleneck_time)
+        results["maximal_achievable_pruning_times"].append(maximal_time)
+        results["maximal_achievable_no_pruning_times"].append(maximal_time)
+        results["pruning"]["times"].append(maximal_time)
+        results["pruning"]["subsets"].append(len(I))
+        results["no_pruning"]["times"].append(maximal_time)
+        results["no_pruning"]["subsets"].append(len(I))
+        results["policy_computation_pruning_times"].append(policy_time)
+        results["policy_computation_no_pruning_times"].append(policy_time)
+        results["human_bottlenecks"].append(len(B_filter))
+
+        gc.collect()
+
+    return results
+
+
 def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
     trial_seed = params.get('seed', 0)
     np.random.seed(trial_seed)
@@ -193,6 +275,10 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         world_type = params['world_type']
+
+        if world_type == 'overcooked':
+            return run_overcooked_experiment(params)
+
         grid_size = params['grid_size']
         num_models = params['num_models']
         query_threshold = params['query_threshold']
@@ -318,14 +404,14 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_available_world_types():
     """Get available world types based on platform and dependencies"""
-    base_worlds = []
-    
-    if PYBULLET_AVAILABLE:
+    base_worlds = ['grid', 'puddle', 'rock', 'overcooked']
+
+    if PYBULLET_AVAILABLE and False:
         base_worlds.append('pybullet')
-        
+
     if not IS_MACOS:
         base_worlds.append('taxi')
-    
+
     return base_worlds
 
 def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list, 
@@ -334,11 +420,12 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                          obstacle_percentages: list, 
                                          max_workers: int = None):
     world_types = get_available_world_types()
-    
+
     all_environments_results = {}
     experiment_params = []
-    
-    batch_size = 6 if PYBULLET_AVAILABLE else 10
+
+    max_workers = max_workers or get_safe_process_count()
+    batch_size = max(max_workers, 6 if PYBULLET_AVAILABLE else 10)
     
     for grid_size in grid_sizes:
         for num_models in human_model_counts:
@@ -359,6 +446,22 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                         }
                         experiment_params.append((world_config, params))
                         
+                elif world_type == 'overcooked':
+                    # No grid, no obstacles — grid_size/obstacle_percent don't apply.
+                    world_config = f"{world_type}_{grid_size}_{num_models}_models_nomove"
+                    for _ in range(num_runs):
+                        params = {
+                            'world_type': world_type,
+                            'grid_size': grid_size,
+                            'num_models': num_models,
+                            'query_threshold': query_threshold,
+                            'obstacle_percent': 0.0,
+                            'puddle_percent': 0.0,
+                            'rock_percent': 0.0,
+                            'seed': random.randint(1, 10000)
+                        }
+                        experiment_params.append((world_config, params))
+
                 elif world_type == 'pybullet':
                     world_config = f"{world_type}_{grid_size}_{num_models}_models_physics"
                     pybullet_runs = max(1, num_runs // 2) if IS_MACOS else num_runs
@@ -390,8 +493,6 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 'seed': random.randint(1, 10000)
                             }
                             experiment_params.append((world_config, params))
-    
-    max_workers = min(max_workers or get_safe_process_count(), 3)
     
     for i in range(0, len(experiment_params), batch_size):
         batch = experiment_params[i:i + batch_size]
@@ -477,6 +578,12 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             grid_size = int(env_parts[2])
             num_models = int(env_parts[3])
             obstacle_percent = 0.0
+        elif "overcooked" in env_type:
+            environment_name = "Overcooked"
+            env_category = "Recipe Game"
+            grid_size = "n/a"
+            num_models = int(env_parts[2])
+            obstacle_percent = "N/A"
         else:
             environment_name = env_parts[0].capitalize()
             env_category = "2D Grid"
@@ -592,10 +699,10 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
 
 def main():
     num_runs = 3
-    grid_sizes = [4, 5]
-    human_model_counts = [8, 10]
+    grid_sizes = [4]
+    human_model_counts = [3, 4]
     obstacle_percentages = [0.1, 0.15]
-    max_workers = 3
+    max_workers = 10
     query_threshold = 1000
     
 
