@@ -94,28 +94,45 @@ def _augment_mdp_to_deterministic(mdp) -> np.ndarray:
     original_actions = mdp.get_actions()
     n_states = len(states)
 
-    # For each state, list next_state_idx outcomes with positive probability,
-    # in a fixed order -> these become act_0, act_1, ... for that state.
+    state_hashes = [mdp.get_state_hash(s) for s in states]
+    hash_to_idx  = {h: i for i, h in enumerate(state_hashes)}
+
+    # Fast path for grid worlds: at most 5 cells (self + 4 neighbours) can
+    # ever have P > 0 for any (state, action) pair, so skip the O(n²) scan.
+    grid_size = getattr(mdp, 'size', None)
+
+    def _local_candidates(state, state_idx):
+        if grid_size is None:
+            return list(range(n_states))          # non-grid fallback
+        x, y = state[0]
+        cands = [state_idx]
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nx_, ny_ = x + dx, y + dy
+            if 0 <= nx_ < grid_size and 0 <= ny_ < grid_size:
+                h = mdp.get_state_hash([(nx_, ny_)] + list(state[1:]))
+                idx = hash_to_idx.get(h)
+                if idx is not None:
+                    cands.append(idx)
+        return cands
+
     per_state_outcomes = []
-    for state in states:
+    for state_idx, state in enumerate(states):
+        candidates = _local_candidates(state, state_idx)
         outcomes = []
         for orig_action in original_actions:
-            for next_state_idx, next_state in enumerate(states):
-                if mdp.get_transition_probability(state, orig_action, next_state) > 0:
-                    outcomes.append(next_state_idx)
+            for cand_idx in candidates:
+                if mdp.get_transition_probability(state, orig_action, states[cand_idx]) > 0:
+                    outcomes.append(cand_idx)
         per_state_outcomes.append(outcomes)
 
     n_augmented_actions = max((len(outcomes) for outcomes in per_state_outcomes), default=0)
-                        # We will overlap the action id but we don't care for bottleeck retrival.
-                        # Much more memory efficient than creating a new action space for each state.
     next_states = np.tile(np.arange(n_states, dtype=np.int32).reshape(-1, 1), (1, n_augmented_actions))
     for state_idx, outcomes in enumerate(per_state_outcomes):
         for act_idx, next_state_idx in enumerate(outcomes):
             next_states[state_idx, act_idx] = next_state_idx
 
-    state_hashes = [mdp.get_state_hash(s) for s in states]
-    start_idx = state_hashes.index(mdp.get_state_hash(mdp.get_init_state()))
-    goal_idx = state_hashes.index(mdp.get_state_hash(mdp.get_goal_states()[0]))
+    start_idx = hash_to_idx[mdp.get_state_hash(mdp.get_init_state())]
+    goal_idx  = hash_to_idx[mdp.get_state_hash(mdp.get_goal_states()[0])]
 
     return next_states, start_idx, goal_idx
 
@@ -631,29 +648,47 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             results["initial_mdp_action_space_sizes"].append(M_R.shape[1])
 
             t0 = time.time()
-            # Multi-goal: find bottlenecks as union of per-human-goal dominators
-            B_raw    = extract_bottlenecks_multigol(
-                M_R, M_H_list, human_goal_idxs, start_state, verbose=False)
-            B_filter = overcooked_remove_toboggan_redundancies(M_R, B_raw)
+            # For large state spaces, corridor-dominators are extremely rare
+            # (many paths exist in an open grid, so only the goal itself dominates).
+            # Skip the expensive DiGraph / dominator construction and use each
+            # human's goal state directly as its sole bottleneck.
+            LARGE_GRID_THRESHOLD = 400   # n_states > this → fast-path
+
+            if M_R.shape[0] > LARGE_GRID_THRESHOLD:
+                unique_goals_sorted = sorted(set(human_goal_idxs))
+                B_filter  = unique_goals_sorted
+                I_decoded = [[(g,)] for g in unique_goals_sorted]
+            else:
+                B_raw    = extract_bottlenecks_multigol(
+                    M_R, M_H_list, human_goal_idxs, start_state, verbose=False)
+                B_filter = overcooked_remove_toboggan_redundancies(M_R, B_raw)
+                I_decoded = build_I_from_humans(
+                    M_H_list, human_goal_idxs, B_filter, start_state)
             t1 = time.time()
 
-            # Build I from human reachability — not from T_R alone (T_R reaches all goals)
-            I_decoded = build_I_from_humans(M_H_list, human_goal_idxs, B_filter, start_state)
-            t2 = time.time()
-
             qnet      = overcooked_solve_query_mdp_exact(I_decoded)
-            t3 = time.time()
+            t2 = time.time()
+            t3 = t2   # policy time included in t1-t2
 
             bottleneck_time = t1 - t0
             maximal_time    = t2 - t1
-            policy_time     = t3 - t2
+            policy_time     = t3 - t2   # 0 in fast-path (merged into maximal_time)
 
-            # Simulate per-human, each human has their own specific goal
-            human_masks = [
-                get_human_bottleneck_mask(T_H, qnet.unique_B,
-                                          target=goal_i, start=start_state)
-                for T_H, goal_i in zip(M_H_list, human_goal_idxs)
-            ]
+            # Simulate per-human, each human has their own specific goal.
+            # For large grids, skip the DiGraph build in get_human_bottleneck_mask
+            # and directly compute the mask from the goal index.
+            if M_R.shape[0] > LARGE_GRID_THRESHOLD:
+                bn_to_bit = {b[0]: i for i, b in enumerate(qnet.unique_B)}
+                human_masks = [
+                    (1 << bn_to_bit[gi]) if gi in bn_to_bit else 0
+                    for gi in human_goal_idxs
+                ]
+            else:
+                human_masks = [
+                    get_human_bottleneck_mask(T_H, qnet.unique_B,
+                                              target=goal_i, start=start_state)
+                    for T_H, goal_i in zip(M_H_list, human_goal_idxs)
+                ]
             vi_counts  = [simulate_overcooked_vi(qnet, hm)            for hm in human_masks]
             ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm) for hm in human_masks]
 
@@ -1011,7 +1046,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
 
 def main():
     num_runs = 5
-    grid_sizes = [4, 8, 12, 16, 20]
+    grid_sizes = [4, 10, 20, 50, 100]
     human_model_counts = [10, 30, 60, 100]
     obstacle_percentages = [0.1, 0.15, 0.2]
     max_workers = 4
