@@ -242,23 +242,28 @@ def build_I_from_humans(M_H_list, human_goal_idxs, bottlenecks, start_state):
 def generate_possible_goals(grid_size):
     """
     Return K candidate goal positions spread across the grid.
-    Always excludes the start (0,0).  Scales with grid size:
-      corners + midpoints of each edge + centre.
+
+    For small grids (size ≤ 8): 8 fixed positions (corners + edge midpoints + centre).
+    For larger grids: a regular sub-grid of ~grid_size positions so there are
+    enough distinct hypothesis types even with 100+ human models.
+    Start (0,0) is always excluded.
     """
+    # Always include the structural anchors
     mid = grid_size // 2
-    candidates = [
-        (0,            grid_size - 1),   # top-right
-        (grid_size-1,  0),               # bottom-left
-        (grid_size-1,  grid_size-1),     # bottom-right
-        (0,            mid),             # mid-top
-        (mid,          0),               # mid-left
-        (mid,          grid_size-1),     # mid-right
-        (grid_size-1,  mid),             # mid-bottom
-        (mid,          mid),             # centre
+    anchors = [
+        (0,            grid_size - 1),
+        (grid_size-1,  0),
+        (grid_size-1,  grid_size-1),
+        (0,            mid),
+        (mid,          0),
+        (mid,          grid_size-1),
+        (grid_size-1,  mid),
+        (mid,          mid),
     ]
+
     seen = set()
     result = []
-    for g in candidates:
+    for g in anchors:
         if g != (0, 0) and g not in seen:
             seen.add(g)
             result.append(g)
@@ -571,12 +576,15 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             if M_R is None:
                 continue
 
-            # Assign each human a distinct random goal from K candidates
+            # Assign each human a random goal from K candidates.
+            # Build T_H only once per unique goal position to avoid redundant
+            # MDP constructions when num_models >> num_candidate_goals.
             possible_goals = generate_possible_goals(grid_size)
-            M_H_list        = []
-            human_goal_idxs = []
-            for i in range(num_models):
-                goal_pos = random.choice(possible_goals)
+            assigned_goals  = [random.choice(possible_goals) for _ in range(num_models)]
+            unique_goals    = list(dict.fromkeys(assigned_goals))   # preserves order, dedup
+
+            goal_to_T_H   = {}   # (row, col) → (next_states, goal_idx)
+            for goal_pos in unique_goals:
                 next_states, start_idx, goal_idx, human_det_time = \
                     generate_human_model_with_goal(
                         world_type=world_type,
@@ -584,13 +592,21 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                         obstacle_percent=obstacle_percent,
                         puddle_percent=puddle_percent,
                         rock_percent=rock_percent,
-                        model_num=i+1,
+                        model_num=0,
                         goal=goal_pos,
                     )
                 if next_states is not None:
-                    M_H_list.append(next_states)
-                    human_goal_idxs.append(goal_idx)
+                    goal_to_T_H[goal_pos] = (next_states, goal_idx)
                     determinizing_time += human_det_time
+
+            # Expand back to the full num_models list (entries may be shared)
+            M_H_list        = []
+            human_goal_idxs = []
+            for goal_pos in assigned_goals:
+                if goal_pos in goal_to_T_H:
+                    ns, gi = goal_to_T_H[goal_pos]
+                    M_H_list.append(ns)
+                    human_goal_idxs.append(gi)
 
 
             results = {
@@ -995,8 +1011,8 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
 
 def main():
     num_runs = 5
-    grid_sizes = [4, 5, 6, 7, 8]
-    human_model_counts = [5, 10, 15, 20]
+    grid_sizes = [4, 8, 12, 16, 20]
+    human_model_counts = [10, 30, 60, 100]
     obstacle_percentages = [0.1, 0.15, 0.2]
     max_workers = 4
     query_threshold = 1000
