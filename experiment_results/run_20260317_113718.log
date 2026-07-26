@@ -1,0 +1,4437 @@
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Number of states 3
+Time to build the sparse matrix: 0.001856088638305664
+Time to run value iteration: 0.00642704963684082
+Number of states 3
+Time to build the sparse matrix: 0.00010132789611816406
+Time to run value iteration: 0.0059850215911865234
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 9
+Time to build the sparse matrix: 0.0003879070281982422
+Time to run value iteration: 0.008628129959106445
+Number of states 9
+Time to build the sparse matrix: 0.00020194053649902344
+Time to run value iteration: 0.008651971817016602
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 81
+Time to build the sparse matrix: 0.011801958084106445
+Time to run value iteration: 0.015526056289672852
+Number of states 81
+Time to build the sparse matrix: 0.011404037475585938
+Time to run value iteration: 0.015608787536621094
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Number of states 3
+Time to build the sparse matrix: 0.00011181831359863281
+Time to run value iteration: 0.0061779022216796875
+Number of states 3
+Time to build the sparse matrix: 7.605552673339844e-05
+Time to run value iteration: 0.00580596923828125
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Number of states 27
+Time to build the sparse matrix: 0.00140380859375
+Time to run value iteration: 0.011566877365112305
+Number of states 27
+Time to build the sparse matrix: 0.0011022090911865234
+Time to run value iteration: 0.01133275032043457
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 3
+Time to build the sparse matrix: 9.083747863769531e-05
+Time to run value iteration: 0.005363941192626953
+Number of states 3
+Time to build the sparse matrix: 7.82012939453125e-05
+Time to run value iteration: 0.005339145660400391
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 3
+Time to build the sparse matrix: 0.00010919570922851562
+Time to run value iteration: 0.005867958068847656
+Number of states 3
+Time to build the sparse matrix: 8.0108642578125e-05
+Time to run value iteration: 0.005717754364013672
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 9
+Time to build the sparse matrix: 0.00025081634521484375
+Time to run value iteration: 0.00896906852722168
+Number of states 9
+Time to build the sparse matrix: 0.0002391338348388672
+Time to run value iteration: 0.008755207061767578
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 27
+Time to build the sparse matrix: 0.0015690326690673828
+Time to run value iteration: 0.012078046798706055
+Number of states 27
+Time to build the sparse matrix: 0.0012400150299072266
+Time to run value iteration: 0.011921882629394531
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 243
+Time to build the sparse matrix: 0.1192481517791748
+Time to run value iteration: 0.0224149227142334
+Number of states 243
+Time to build the sparse matrix: 0.1177220344543457
+Time to run value iteration: 0.02277088165283203
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Number of states 81
+Time to build the sparse matrix: 0.01142573356628418
+Time to run value iteration: 0.015596151351928711
+Number of states 81
+Time to build the sparse matrix: 0.011712074279785156
+Time to run value iteration: 0.015583992004394531
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Number of states 27
+Time to build the sparse matrix: 0.0013308525085449219
+Time to run value iteration: 0.012041091918945312
+Number of states 27
+Time to build the sparse matrix: 0.0012011528015136719
+Time to run value iteration: 0.011955976486206055
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 9
+Time to build the sparse matrix: 0.00024199485778808594
+Time to run value iteration: 0.009159326553344727
+Number of states 9
+Time to build the sparse matrix: 0.00022721290588378906
+Time to run value iteration: 0.00917506217956543
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 1), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((0, 3), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 1), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 243
+Time to build the sparse matrix: 0.11774301528930664
+Time to run value iteration: 0.02252817153930664
+Number of states 243
+Time to build the sparse matrix: 0.11731910705566406
+Time to run value iteration: 0.02256631851196289
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((0, 3), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((2, 0), (), ())
+Identified bottleneck state: ((3, 1), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((0, 3), (), ())
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 10 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((2, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 11 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 3
+Time to build the sparse matrix: 0.00011396408081054688
+Time to run value iteration: 0.005790233612060547
+Number of states 3
+Time to build the sparse matrix: 5.4836273193359375e-05
+Time to run value iteration: 0.005833864212036133
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((0, 3), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((0, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((0, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 9 iterations.
+Converged after 9 iterations.
+Number of states 6561
+Time to build the sparse matrix: 131.38959217071533
+Time to run value iteration: 0.21774792671203613
+Number of states 6561
+Time to build the sparse matrix: 1129.338152885437
+Time to run value iteration: 0.26038098335266113
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+No path found
+Identified bottleneck state: ((3, 1), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Number of states 2187
+Time to build the sparse matrix: 14.303645849227905
+Time to run value iteration: 0.09364199638366699
+Number of states 2187
+Time to build the sparse matrix: 388.9493021965027
+Time to run value iteration: 0.0833749771118164
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((2, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((0, 2), (), ())
+Identified bottleneck state: ((0, 3), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((0, 3), (), ())
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((3, 1), (), ())
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 5 iterations.
+Identified bottleneck state: ((0, 2), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((0, 3), (), ())
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 9 iterations.
+Converged after 11 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 19683
+Time to build the sparse matrix: 2725.2313861846924
+Time to run value iteration: 0.7259078025817871
+Number of states 19683
+Time to build the sparse matrix: 1879.6497428417206
+Time to run value iteration: 0.6886279582977295
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((2, 2), (), ())
+Identified bottleneck state: ((3, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 7 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 7 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 10 iterations.
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((2, 2), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((3, 2), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Number of states 729
+Time to build the sparse matrix: 1.1958589553833008
+Time to run value iteration: 0.03703498840332031
+Number of states 729
+Time to build the sparse matrix: 1.1932809352874756
+Time to run value iteration: 0.03586411476135254
+Identified bottleneck state: ((1, 3), (), ())
+Identified bottleneck state: ((2, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((0, 1), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((1, 2), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 0), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 10 iterations.
+Converged after 3 iterations.
+Identified bottleneck state: ((1, 3), (), ())
+Converged after 7 iterations.
+Converged after 2 iterations.
+Identified bottleneck state: ((2, 3), (), ())
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((0, 1), (), ())
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 4 iterations.
+Identified bottleneck state: ((1, 2), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 6 iterations.
+Identified bottleneck state: ((1, 0), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Number of states 729
+Time to build the sparse matrix: 1.2179570198059082
+Time to run value iteration: 0.036862850189208984
+Number of states 729
+Time to build the sparse matrix: 1.200855016708374
+Time to run value iteration: 0.03632402420043945
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Number of states 3
+Time to build the sparse matrix: 0.00011181831359863281
+Time to run value iteration: 0.005781888961791992
+Number of states 3
+Time to build the sparse matrix: 5.1975250244140625e-05
+Time to run value iteration: 0.005684852600097656
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Number of states 3
+Time to build the sparse matrix: 0.00010919570922851562
+Time to run value iteration: 0.005812168121337891
+Number of states 3
+Time to build the sparse matrix: 5.0067901611328125e-05
+Time to run value iteration: 0.005688905715942383
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Identified bottleneck state: ((1, 1), (), ())
+Identified bottleneck state: ((3, 3), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+Converged after 11 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 5 iterations.
+Identified bottleneck state: ((1, 1), (), ())
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 8 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 8 iterations.
+Converged after 9 iterations.
+Converged after 7 iterations.
+Converged after 7 iterations.
+Converged after 10 iterations.
+Converged after 8 iterations.
+Converged after 11 iterations.
+Converged after 9 iterations.
+Converged after 10 iterations.
+/Users/silvia/anaconda3/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 13 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

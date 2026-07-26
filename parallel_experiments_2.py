@@ -37,6 +37,9 @@ from overcooked_env import (
     find_maximally_achievable_subsets as overcooked_find_maximally_achievable_subsets,
     decode_subsets_to_2d_nomove as overcooked_decode_subsets_to_2d_nomove,
     solve_query_mdp_exact as overcooked_solve_query_mdp_exact,
+    get_human_bottleneck_mask,
+    simulate_overcooked_vi,
+    simulate_overcooked_info_gain,
     NUM_POT as OVERCOOKED_NUM_POT,
     SERVE_ACTION as OVERCOOKED_SERVE_ACTION,
     CLIENT_SERVED as OVERCOOKED_CLIENT_SERVED,
@@ -117,23 +120,7 @@ def _augment_mdp_to_deterministic(mdp) -> np.ndarray:
     return next_states, start_idx, goal_idx
 
 def extract_bottlenecks(T_R, T_H_list, start_state, goal_state, verbose=True):
-    """Extract mandatory bottleneck states from a single transition matrix.
-
-    Builds a directed graph from T, runs the dominator tree from start_state,
-    and collects every state that lies on every path to any target state.
-
-    Parameters
-    ----------
-    T_R            : ndarray, shape (n_states, n_actions)  robot transition matrix
-    T_H_list       : list[ndarray], shape (n_states, n_actions)  human transition matrices
-    start_state    : int  index of the start state
-    goal_state     : int  index of the goal state
-    verbose        : bool
-
-    Returns
-    -------
-    list[int]  sorted bottleneck state IDs, always includes absorbing_state
-    """
+    """Single-goal bottleneck extraction (legacy — used by Overcooked path)."""
     G = nx.DiGraph()
     for state in range(T_R.shape[0]):
         for action in range(T_R.shape[1]):
@@ -151,6 +138,130 @@ def extract_bottlenecks(T_R, T_H_list, start_state, goal_state, verbose=True):
     result = sorted(bottlenecks)
     if verbose:
         print(f"Found {len(result)} bottleneck states via dominator tree.")
+    return result
+
+
+def extract_bottlenecks_multigol(T_R, T_H_list, human_goal_indices, start_state, verbose=True):
+    """
+    Multi-goal bottleneck extraction.
+
+    For each human model with its own distinct goal, find the dominator states
+    on the path from start to that goal.  The final bottleneck set is the union
+    across all human goals — these are the states that discriminate between plans.
+
+    Parameters
+    ----------
+    T_R               : ndarray (n_states, n_actions)  robot/environment dynamics
+    T_H_list          : list[ndarray]  one transition matrix per human model
+    human_goal_indices: list[int]      goal state index for each human model
+    start_state       : int
+    verbose           : bool
+
+    Returns
+    -------
+    list[int]  sorted union of per-goal dominator states
+    """
+    # Base graph from robot dynamics
+    G_base = nx.DiGraph()
+    for state in range(T_R.shape[0]):
+        for action in range(T_R.shape[1]):
+            nxt = int(T_R[state, action])
+            if nxt != state:
+                G_base.add_edge(state, nxt)
+
+    bottlenecks = set()
+    for T_H, goal in zip(T_H_list, human_goal_indices):
+        G = G_base.copy()
+        for state in range(T_H.shape[0]):
+            for action in range(T_H.shape[1]):
+                nxt = int(T_H[state, action])
+                if nxt != state:
+                    G.add_edge(state, nxt)
+        if not G.has_node(goal) or not nx.has_path(G, start_state, goal):
+            continue
+        bottlenecks.add(goal)
+        bottlenecks |= _dominator_bottlenecks(G, start_state, [goal])
+
+    result = sorted(bottlenecks)
+    if verbose:
+        print(f"Found {len(result)} bottleneck states (multi-goal union).")
+    return result
+
+
+def build_I_from_humans(M_H_list, human_goal_idxs, bottlenecks, start_state):
+    """
+    Build hypothesis space I from per-human reachability.
+
+    For each human model, identify which subset of ``bottlenecks`` they must
+    pass through on their way to their specific goal.  I is the list of
+    distinct bottleneck subsets — one per unique human "type".
+
+    This replaces ``find_maximally_achievable_subsets`` for multi-goal grids
+    because T_R can reach all goals, so the MAS algorithm would trivially
+    return one giant subset.
+
+    Parameters
+    ----------
+    M_H_list         : list[ndarray]  per-human transition matrices
+    human_goal_idxs  : list[int]      goal state index per human
+    bottlenecks      : list[int]      ordered list of bottleneck state IDs
+    start_state      : int
+
+    Returns
+    -------
+    I_decoded : list[list[tuple]]   e.g. [[(2,), (3,)], [(12,), (15,)], …]
+    """
+    import networkx as nx_local
+
+    bn_set = set(bottlenecks)
+    seen   = set()
+    I      = []
+
+    for T_H, goal in zip(M_H_list, human_goal_idxs):
+        G = nx_local.DiGraph()
+        for state in range(T_H.shape[0]):
+            for action in range(T_H.shape[1]):
+                nxt = int(T_H[state, action])
+                if nxt != state:
+                    G.add_edge(state, nxt)
+
+        if not G.has_node(goal) or not nx_local.has_path(G, start_state, goal):
+            continue
+
+        dominated = _dominator_bottlenecks(G, start_state, [goal])
+        dominated.add(goal)
+        subset = tuple(sorted(dominated & bn_set))
+
+        if subset and subset not in seen:
+            seen.add(subset)
+            I.append([(s,) for s in subset])
+
+    return I
+
+
+def generate_possible_goals(grid_size):
+    """
+    Return K candidate goal positions spread across the grid.
+    Always excludes the start (0,0).  Scales with grid size:
+      corners + midpoints of each edge + centre.
+    """
+    mid = grid_size // 2
+    candidates = [
+        (0,            grid_size - 1),   # top-right
+        (grid_size-1,  0),               # bottom-left
+        (grid_size-1,  grid_size-1),     # bottom-right
+        (0,            mid),             # mid-top
+        (mid,          0),               # mid-left
+        (mid,          grid_size-1),     # mid-right
+        (grid_size-1,  mid),             # mid-bottom
+        (mid,          mid),             # centre
+    ]
+    seen = set()
+    result = []
+    for g in candidates:
+        if g != (0, 0) and g not in seen:
+            seen.add(g)
+            result.append(g)
     return result
 
 
@@ -217,6 +328,53 @@ def generate_human_model(world_type, grid_size, obstacle_percent, puddle_percent
         pass
 
     return M_H
+
+def generate_human_model_with_goal(world_type, grid_size, obstacle_percent,
+                                    puddle_percent, rock_percent, model_num, goal):
+    """
+    Like generate_human_model but with an explicit (row, col) goal position.
+    Returns (next_states, start_idx, goal_idx, det_time) or (None, …) on failure.
+    """
+    M_H = None
+    try:
+        if world_type in ('grid', 'four_rooms'):
+            mdp = generate_and_visualize_gridworld(
+                size=grid_size, start=(0, 0), goal=goal,
+                obstacles_percent=obstacle_percent,
+                divide_rooms=(world_type == 'four_rooms'),
+                model_type=f"Human Model {model_num}",
+                obstacle_seed=random.randint(1, 10000),
+            )
+        elif world_type == 'puddle':
+            mdp = generate_and_visualize_puddleworld(
+                size=grid_size, start=(0, 0), goal=goal,
+                obstacles_percent=obstacle_percent,
+                puddle_percent=puddle_percent,
+                model_type=f"Human Model {model_num}",
+                obstacle_seed=random.randint(1, 10000),
+            )
+        elif world_type == 'rock':
+            mdp = generate_and_visualize_rockworld(
+                size=grid_size, start=(0, 0), goal=goal,
+                obstacles_percent=obstacle_percent,
+                rock_percent=rock_percent,
+                model_type=f"Human Model {model_num}",
+                obstacle_seed=random.randint(1, 10000),
+            )
+        else:
+            return None, None, None, 0.0
+
+        det_t0 = time.time()
+        next_states, start_idx, goal_idx = _augment_mdp_to_deterministic(mdp)
+        det_time = time.time() - det_t0
+        M_H = (next_states, start_idx, goal_idx, det_time)
+    except Exception:
+        pass
+
+    if M_H is None:
+        return None, None, None, 0.0
+    return M_H
+
 
 def generate_robot_model(world_type, grid_size, obstacle_percent, puddle_percent, rock_percent, divide_rooms=False):
     M_R = None
@@ -301,16 +459,11 @@ def build_overcooked_models():
 
 def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str, Any]:
     """
-    Overcooked (no-move) pipeline — deterministic, no grid/obstacles, so unlike
-    the grid-family games, repeating trials only measures timing noise (mirrors
-    notebook 9's N_REPEATS). There is no tractable "without pruning" alternative
-    for this domain (solving the unfiltered 56-bottleneck Query MDP would need
-    3^56 states), so the no-pruning columns are filled with the pruned numbers,
-    matching notebook 9.
+    Overcooked (no-move) pipeline.
 
-    determinizing_mdp_time is measured once by the caller (build_overcooked_models
-    is deterministic, so there's nothing to re-measure per trial) and replicated
-    across trials here so the array lengths match the other timing arrays.
+    The environment is deterministic so timing is measured once; query counts
+    are averaged across human models (each T_H follows a different recipe).
+    Query All = len(B_filter) — ask about every decision-point bottleneck.
     """
     results = {
         "determinizing_mdp_times": [],
@@ -322,6 +475,7 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str
         "pruning": {"times": [], "checks": [], "subsets": []},
         "no_pruning": {"times": [], "checks": [], "subsets": []},
         "query_counts": [],
+        "information_gain_counts": [],
         "query_all_counts": [],
         "human_bottlenecks": [],
         "initial_mdp_state_space_sizes": [],
@@ -330,27 +484,39 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str
 
     num_trials = 3 if IS_MACOS else 5
 
+    # Build pipeline once (deterministic)
+    t0 = time.time()
+    B        = overcooked_extract_bottlenecks([T_R], verbose=False)
+    B_filter = overcooked_remove_toboggan_redundancies(T_R, B)
+    t1 = time.time()
+
+    I        = overcooked_find_maximally_achievable_subsets(B_filter, T_R)
+    I_decoded = overcooked_decode_subsets_to_2d_nomove(I)
+    t2 = time.time()
+
+    qnet = overcooked_solve_query_mdp_exact(I_decoded)
+    t3 = time.time()
+
+    bottleneck_time = t1 - t0
+    maximal_time    = t2 - t1
+    policy_time     = t3 - t2
+
+    # Precompute human bottleneck masks (one per recipe / T_H)
+    human_masks = [
+        get_human_bottleneck_mask(T_H, qnet.unique_B)
+        for T_H in T_H_list
+    ]
+
+    # Simulate query counts across human models
+    vi_counts  = [simulate_overcooked_vi(qnet, hm) for hm in human_masks]
+    ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm) for hm in human_masks]
+    all_count  = len(B_filter)   # Query All: ask about every decision-point
+
+    # Replicate timing arrays across trials (only noise varies between trials)
     for _ in range(num_trials):
         results["determinizing_mdp_times"].append(determinizing_mdp_time)
         results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
         results["initial_mdp_action_space_sizes"].append(T_R.shape[1])
-
-        t0 = time.time()
-        B = overcooked_extract_bottlenecks([T_R], verbose=False)
-        B_filter = overcooked_remove_toboggan_redundancies(T_R, B)
-        t1 = time.time()
-
-        I = overcooked_find_maximally_achievable_subsets(B_filter, T_R)
-        I_decoded = overcooked_decode_subsets_to_2d_nomove(I)
-        t2 = time.time()
-
-        overcooked_solve_query_mdp_exact(I_decoded)
-        t3 = time.time()
-
-        bottleneck_time = t1 - t0
-        maximal_time    = t2 - t1
-        policy_time     = t3 - t2
-
         results["bottleneck_finding_times"].append(bottleneck_time)
         results["maximal_achievable_pruning_times"].append(maximal_time)
         results["maximal_achievable_no_pruning_times"].append(maximal_time)
@@ -361,9 +527,12 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str
         results["policy_computation_pruning_times"].append(policy_time)
         results["policy_computation_no_pruning_times"].append(policy_time)
         results["human_bottlenecks"].append(len(B_filter))
+        # Query counts: average over human models, one entry per trial
+        results["query_counts"].append(float(np.mean(vi_counts)))
+        results["information_gain_counts"].append(float(np.mean(ig_counts)))
+        results["query_all_counts"].append(float(all_count))
 
-        gc.collect()
-
+    gc.collect()
     return results
 
 
@@ -402,18 +571,25 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             if M_R is None:
                 continue
 
-            M_H_list = []
+            # Assign each human a distinct random goal from K candidates
+            possible_goals = generate_possible_goals(grid_size)
+            M_H_list        = []
+            human_goal_idxs = []
             for i in range(num_models):
-                M_H, _, _, human_det_time = generate_human_model(
-                    world_type=world_type,
-                    grid_size=grid_size,
-                    obstacle_percent=obstacle_percent,
-                    puddle_percent=puddle_percent,
-                    rock_percent=rock_percent,
-                    model_num=i+1
-                )
-                if M_H is not None:
-                    M_H_list.append(M_H)
+                goal_pos = random.choice(possible_goals)
+                next_states, start_idx, goal_idx, human_det_time = \
+                    generate_human_model_with_goal(
+                        world_type=world_type,
+                        grid_size=grid_size,
+                        obstacle_percent=obstacle_percent,
+                        puddle_percent=puddle_percent,
+                        rock_percent=rock_percent,
+                        model_num=i+1,
+                        goal=goal_pos,
+                    )
+                if next_states is not None:
+                    M_H_list.append(next_states)
+                    human_goal_idxs.append(goal_idx)
                     determinizing_time += human_det_time
 
 
@@ -427,6 +603,7 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                 "pruning": {"times": [], "checks": [], "subsets": []},
                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                 "query_counts": [],
+                "information_gain_counts": [],
                 "query_all_counts": [],
                 "human_bottlenecks": [],
                 "initial_mdp_state_space_sizes": [],
@@ -438,37 +615,49 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             results["initial_mdp_action_space_sizes"].append(M_R.shape[1])
 
             t0 = time.time()
-            B = extract_bottlenecks(M_R, M_H_list, start_state, goal_state, verbose=False)
+            # Multi-goal: find bottlenecks as union of per-human-goal dominators
+            B_raw    = extract_bottlenecks_multigol(
+                M_R, M_H_list, human_goal_idxs, start_state, verbose=False)
+            B_filter = overcooked_remove_toboggan_redundancies(M_R, B_raw)
             t1 = time.time()
 
-            I = overcooked_find_maximally_achievable_subsets(B, M_R)
-            I_decoded = [[(s,) for s in subset] for subset in I]
+            # Build I from human reachability — not from T_R alone (T_R reaches all goals)
+            I_decoded = build_I_from_humans(M_H_list, human_goal_idxs, B_filter, start_state)
             t2 = time.time()
 
-            overcooked_solve_query_mdp_exact(I_decoded)
+            qnet      = overcooked_solve_query_mdp_exact(I_decoded)
             t3 = time.time()
 
             bottleneck_time = t1 - t0
             maximal_time    = t2 - t1
             policy_time     = t3 - t2
 
+            # Simulate per-human, each human has their own specific goal
+            human_masks = [
+                get_human_bottleneck_mask(T_H, qnet.unique_B,
+                                          target=goal_i, start=start_state)
+                for T_H, goal_i in zip(M_H_list, human_goal_idxs)
+            ]
+            vi_counts  = [simulate_overcooked_vi(qnet, hm)            for hm in human_masks]
+            ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm) for hm in human_masks]
+
             results["bottleneck_finding_times"].append(bottleneck_time)
             results["maximal_achievable_pruning_times"].append(maximal_time)
             results["maximal_achievable_no_pruning_times"].append(maximal_time)
             results["pruning"]["times"].append(maximal_time)
-            results["pruning"]["subsets"].append(len(I))
+            results["pruning"]["subsets"].append(len(I_decoded))
             results["no_pruning"]["times"].append(maximal_time)
-            results["no_pruning"]["subsets"].append(len(I))
+            results["no_pruning"]["subsets"].append(len(I_decoded))
             results["policy_computation_pruning_times"].append(policy_time)
             results["policy_computation_no_pruning_times"].append(policy_time)
-            results["human_bottlenecks"].append(len(B))
+            results["human_bottlenecks"].append(len(B_filter))
+            results["query_counts"].append(float(np.mean(vi_counts)) if vi_counts else 0.0)
+            results["information_gain_counts"].append(float(np.mean(ig_counts)) if ig_counts else 0.0)
+            results["query_all_counts"].append(float(len(B_filter)))
 
             gc.collect()
 
-
-
-
-            return results
+        return results
 
     except Exception as e:
         logging.error(f"Error in run_single_experiment ({world_type}): {str(e)}")
@@ -496,9 +685,23 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
     max_workers = max_workers or get_safe_process_count()
     batch_size = max(max_workers, 6 if PYBULLET_AVAILABLE else 10)
 
+    # Overcooked is grid/obstacle-independent — run it only once
+    overcooked_config = "overcooked_nomove"
+    for _ in range(num_runs):
+        experiment_params.append((overcooked_config, {
+            'world_type': 'overcooked',
+            'grid_size': 0,
+            'num_models': 0,
+            'query_threshold': query_threshold,
+            'obstacle_percent': 0.0,
+            'seed': random.randint(1, 10000),
+        }))
+
+    grid_world_types = [w for w in world_types if w != 'overcooked']
+
     for grid_size in grid_sizes:
         for num_models in human_model_counts:
-            for world_type in world_types:
+            for world_type in grid_world_types:
 
                 if world_type == 'four_rooms':
                     world_config = f"{world_type}_{grid_size}_{num_models}_models_0.0"
@@ -587,6 +790,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 "pruning": {"times": [], "checks": [], "subsets": []},
                                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                                 "query_counts": [],
+                                "information_gain_counts": [],
                                 "query_all_counts": [],
                                 "human_bottlenecks": [],
                                 "initial_mdp_state_space_sizes": [],
@@ -628,6 +832,9 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
         'Total Runtime With Pruning (s)': [],
         'Total Runtime Without Pruning (s)': [],
         'Runtime Improvement (%)': [],
+        'Query Count (Strategic VI)': [],
+        'Query Count (Info Gain)': [],
+        'Query Count (Query All)': [],
         'Human Bottlenecks': [],
         'Initial State Space': [],
         'Initial Actions': []
@@ -655,7 +862,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             environment_name = "Overcooked"
             env_category = "Recipe Game"
             grid_size = "n/a"
-            num_models = int(env_parts[2])
+            num_models = int(env_parts[2]) if len(env_parts) > 2 and env_parts[2].isdigit() else "n/a"
             obstacle_percent = "N/A"
         else:
             environment_name = env_parts[0].capitalize()
@@ -733,6 +940,18 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
                 combined_data['Total Runtime Without Pruning (s)'].append("N/A")
                 combined_data['Runtime Improvement (%)'].append("N/A")
 
+            for col, key in [
+                ('Query Count (Strategic VI)', 'query_counts'),
+                ('Query Count (Info Gain)',    'information_gain_counts'),
+                ('Query Count (Query All)',    'query_all_counts'),
+            ]:
+                vals = results.get(key, [])
+                if vals:
+                    arr = np.array(vals[:min_len], dtype=float)
+                    combined_data[col].append(f"{np.mean(arr):.2f} ± {np.std(arr):.2f}")
+                else:
+                    combined_data[col].append("N/A")
+
             bottlenecks = np.array(results['human_bottlenecks'][:min_len])
             combined_data['Human Bottlenecks'].append(
                 f"{np.mean(bottlenecks):.1f} ± {np.std(bottlenecks):.1f}")
@@ -775,11 +994,11 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
     return df
 
 def main():
-    num_runs = 3
-    grid_sizes = [4]
-    human_model_counts = [3, 4]
-    obstacle_percentages = [0.1, 0.15]
-    max_workers = 3
+    num_runs = 5
+    grid_sizes = [4, 5, 6, 7, 8]
+    human_model_counts = [5, 10, 15, 20]
+    obstacle_percentages = [0.1, 0.15, 0.2]
+    max_workers = 4
     query_threshold = 1000
 
     try:

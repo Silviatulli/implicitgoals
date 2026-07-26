@@ -558,7 +558,7 @@ class ExactQNet(nn.Module):
     """
 
     def __init__(self, n, best_action_mask, POW3, V, failure, success,
-                 unique_B, B_to_idx, p_I):
+                 unique_B, B_to_idx, p_I, target_masks=None):
         super().__init__()
         self.n                = n
         self.best_action_mask = best_action_mask
@@ -569,6 +569,7 @@ class ExactQNet(nn.Module):
         self.unique_B         = unique_B
         self.B_to_idx         = B_to_idx
         self.p_I              = p_I
+        self.target_masks     = target_masks if target_masks is not None else []
 
     def forward(self, x):
         """(batch, 2n) float tensor → (batch, n) Q-value tensor."""
@@ -708,4 +709,201 @@ def solve_query_mdp_exact(I_decoded, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0, or
         n=n, best_action_mask=best_action_mask, POW3=POW3,
         V=V, failure=failure, success=success,
         unique_B=unique_B, B_to_idx=B_to_idx, p_I=p_I,
+        target_masks=target_masks.tolist(),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.  Policy simulation helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_human_bottleneck_mask(
+    T_H: np.ndarray,
+    unique_B: list,
+    target: int = None,
+    start: int = 0,
+) -> int:
+    """
+    Determine which bottlenecks in unique_B the human must pass through.
+
+    Works for two bottleneck formats:
+      - Overcooked: unique_B contains [inv_id, pot_id] pairs
+                    → raw_id = inv_id * NUM_POT + pot_id
+                    → target defaults to CLIENT_SERVED
+      - Grid:       unique_B contains (state_id,) 1-tuples
+                    → raw_id = state_id
+                    → target must be provided (= goal_state index)
+
+    Parameters
+    ----------
+    T_H     : ndarray, human's transition matrix
+    unique_B: list of bottleneck descriptors (see above)
+    target  : absorbing/goal state integer ID (None → Overcooked CLIENT_SERVED)
+    start   : start state index (default 0)
+
+    Returns
+    -------
+    int  bitmask over unique_B (bit i set ↔ human passes through unique_B[i])
+    """
+    if target is None:
+        target = CLIENT_SERVED
+        def to_raw(b): return b[0] * NUM_POT + b[1]
+    else:
+        def to_raw(b): return b[0]
+
+    G = nx.DiGraph()
+    for state in range(T_H.shape[0]):
+        for action in range(T_H.shape[1]):
+            nxt = int(T_H[state, action])
+            if nxt != state:
+                G.add_edge(state, nxt)
+
+    if not G.has_node(target) or not nx.has_path(G, start, target):
+        return 0
+
+    human_bn_raw = _dominator_bottlenecks(G, start, [target])
+    human_bn_raw.add(target)
+
+    mask = 0
+    for i, b in enumerate(unique_B):
+        if to_raw(b) in human_bn_raw:
+            mask |= (1 << i)
+    return mask
+
+
+def simulate_overcooked_vi(qnet: "ExactQNet", human_mask: int) -> int:
+    """
+    Simulate the Strategic VI policy (ExactQNet) against one human model,
+    counting queries until the hypothesis space is uniquely determined.
+
+    Termination criterion: at most one achievable subset remains consistent
+    with the queries answered so far (same criterion as simulate_overcooked_info_gain).
+    The qnet's policy selects WHICH bottleneck to query at each step.
+
+    Parameters
+    ----------
+    qnet        : ExactQNet returned by solve_query_mdp_exact
+    human_mask  : bitmask from get_human_bottleneck_mask
+
+    Returns
+    -------
+    int  number of queries asked before the goal is uniquely determined
+    """
+    n            = qnet.n
+    POW3         = qnet.POW3
+    target_masks = qnet.target_masks
+    FULL_MASK    = (1 << n) - 1
+    K_I          = 0
+    K_not        = 0
+    count        = 0
+
+    for _ in range(n + 1):
+        # Stop when hypothesis space is uniquely determined
+        consistent = [t for t in target_masks
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        state_idx = int(np.dot(
+            np.array([(((K_I >> i) & 1) + 2 * ((K_not >> i) & 1)) for i in range(n)],
+                     dtype=np.int64),
+            POW3
+        ))
+        if qnet.failure[state_idx]:
+            break
+
+        action_bitmask = int(qnet.best_action_mask[state_idx])
+        if action_bitmask == 0:
+            # No policy action — fall back to first unqueried bottleneck
+            used = K_I | K_not
+            unqueried = [i for i in range(n) if not ((used >> i) & 1)]
+            if not unqueried:
+                break
+            action_idx = unqueried[0]
+        else:
+            action_idx = (action_bitmask & -action_bitmask).bit_length() - 1
+
+        if (human_mask >> action_idx) & 1:
+            K_I   |= (1 << action_idx)
+        else:
+            K_not |= (1 << action_idx)
+        count += 1
+
+    return count
+
+
+def simulate_overcooked_info_gain(I_decoded: list, human_mask: int) -> int:
+    """
+    Simulate the greedy maximum-information-gain policy against one human model.
+
+    At each step pick the unqueried bottleneck that maximises Shannon entropy
+    reduction (uniform prior over consistent hypotheses).
+
+    Parameters
+    ----------
+    I_decoded  : list of lists of [inv_id, pot_id] (from decode_subsets_to_2d_nomove)
+    human_mask : bitmask from get_human_bottleneck_mask
+
+    Returns
+    -------
+    int  number of queries asked before termination
+    """
+    unique_B   = sorted(set(tuple(b) for subset in I_decoded for b in subset))
+    n          = len(unique_B)
+    FULL_MASK  = (1 << n) - 1
+
+    target_masks = []
+    for subset in I_decoded:
+        m = 0
+        for b in subset:
+            m |= 1 << unique_B.index(tuple(b))
+        target_masks.append(m)
+
+    K_I   = 0
+    K_not = 0
+    count = 0
+
+    for _ in range(n + 1):
+        used      = K_I | K_not
+        unqueried = FULL_MASK & ~used
+        I_hat     = K_I | unqueried
+
+        # success: I_hat exactly equals one target
+        if any(I_hat == t for t in target_masks):
+            break
+
+        consistent = [t for t in target_masks
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        N = len(consistent)
+
+        best_ig  = -1.0
+        best_bit = -1
+        for i in range(n):
+            if (used >> i) & 1:
+                continue
+            yes_h = [t for t in consistent if (t >> i) & 1]
+            no_h  = [t for t in consistent if not ((t >> i) & 1)]
+            p_yes = len(yes_h) / N
+            p_no  = len(no_h)  / N
+
+            def _h(k):
+                return -np.log2(1.0 / k) if k > 0 else 0.0
+
+            ig = np.log2(N) - (p_yes * _h(len(yes_h)) + p_no * _h(len(no_h)))
+            if ig > best_ig:
+                best_ig  = ig
+                best_bit = i
+
+        if best_bit == -1:
+            break
+
+        if (human_mask >> best_bit) & 1:
+            K_I   |= (1 << best_bit)
+        else:
+            K_not |= (1 << best_bit)
+        count += 1
+
+    return count

@@ -59,5 +59,4 @@ def BFSearch(startState, goal_test, successor_generator):
                     new_path = path + [action]
                     fringe.put((next_state, new_path))
     
-    print("No path found")
     return None  
