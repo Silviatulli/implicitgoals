@@ -1047,7 +1047,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
 def main():
     num_runs = 5
     grid_sizes = [4, 10, 20, 50, 100, 196]   # 196x196 = 38,416 ≈ Overcooked (38,417)
-    human_model_counts = [10]                 # matches Overcooked's 10 recipe hypotheses
+    human_model_counts = [10, 50, 100]
     obstacle_percentages = [0.1, 0.15, 0.2]
     max_workers = 4
     query_threshold = 1000

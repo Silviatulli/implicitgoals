@@ -1,9 +1,9 @@
 """
 Generate publication-quality figures and LaTeX tables combining:
   - Grid / Puddle / Rock  (from multi-goal experiment, CSV aggregated by env type)
-  - Overcooked            (from yacine_overcooked branch, averaged over human models)
+  - Overcooked            (fixed recipe hypotheses, independent of num_models)
 
-Layout: two-panel figure (left: grid environments, right: Overcooked).
+Layout: two-panel figure (left: query counts vs #models, right: Overcooked reference).
 """
 
 import re
@@ -16,77 +16,61 @@ import matplotlib.gridspec as gridspec
 from scipy import stats
 import os
 
-# ── Load grid results from CSV ────────────────────────────────────────────────
+# ── Load results from CSV ──────────────────────────────────────────────────────
 CSV_PATH = 'experiment_results_2/enhanced_pybullet_comparison.csv'
 
 def _parse_mean_std(s):
-    """Parse '3.52 ± 0.64' → (3.52, 0.64)."""
     m = re.match(r'([\d.]+)\s*[±]\s*([\d.]+)', str(s))
     if m:
         return float(m.group(1)), float(m.group(2))
     try:
-        v = float(s)
-        return v, 0.0
+        return float(s), 0.0
     except (ValueError, TypeError):
         return np.nan, np.nan
 
-df = pd.read_csv(CSV_PATH)
-df = df[~df['Environment'].str.contains('overcooked', case=False, na=False)].copy()
+
+df_full = pd.read_csv(CSV_PATH)
+
+# ── Overcooked row (fixed, recipe-based hypothesis space) ─────────────────────
+df_oc_row = df_full[df_full['Environment'].str.contains('overcooked', case=False, na=False)].copy()
+if not df_oc_row.empty:
+    oc_vi,  _ = _parse_mean_std(df_oc_row['Query Count (Strategic VI)'].iloc[0])
+    oc_ig,  _ = _parse_mean_std(df_oc_row['Query Count (Info Gain)'].iloc[0])
+    oc_all, _ = _parse_mean_std(df_oc_row['Query Count (Query All)'].iloc[0])
+else:
+    oc_vi, oc_ig, oc_all = 9.80, 4.70, 17.00
+
+oc_data = {'Overcooked': {'vi': [oc_vi], 'ig': [oc_ig], 'all': [oc_all], 'ss': 38417}}
+
+# ── Grid environments – parse and filter ─────────────────────────────────────
+df = df_full[~df_full['Environment'].str.contains('overcooked', case=False, na=False)].copy()
 
 for col in ['Query Count (Strategic VI)', 'Query Count (Info Gain)', 'Query Count (Query All)']:
     df[[col + '_mean', col + '_std']] = df[col].apply(
         lambda x: pd.Series(_parse_mean_std(x))
     )
 
-# Aggregate by environment type (mean of means)
-env_groups = df.groupby('Environment', sort=False)
+# Coerce num-models column
+df['Number of Human Models'] = pd.to_numeric(df['Number of Human Models'], errors='coerce')
+MODEL_COUNTS = sorted(df['Number of Human Models'].dropna().unique().astype(int).tolist())
 
-grid_raw = {}
-for env_name, grp in env_groups:
-    vi_vals  = grp['Query Count (Strategic VI)_mean'].dropna().values
-    ig_vals  = grp['Query Count (Info Gain)_mean'].dropna().values
-    all_vals = grp['Query Count (Query All)_mean'].dropna().values
-    # Representative state space: use most common grid_size^2
-    ss = int(grp['Initial State Space'].median()) if 'Initial State Space' in grp else 0
-    grid_raw[env_name] = {
-        'vi':  vi_vals.tolist(),
-        'ig':  ig_vals.tolist(),
-        'all': all_vals.tolist(),
-        'ss':  ss,
-    }
-
-# ── Overcooked (deterministic, from previous run) ─────────────────────────────
-oc_raw = {
-    'Overcooked': {
-        'vi':  [14.20, 14.20, 14.20],
-        'ig':  [ 4.70,  4.70,  4.70],
-        'all': [17.00, 17.00, 17.00],
-        'ss':  38417,
-    }
-}
-
-# ── Colour palette ────────────────────────────────────────────────────────────
-COLOR_VI  = '#9B9FCE'
-COLOR_IG  = '#F4A460'
-COLOR_ALL = '#6DBF7A'
-
-
+# ── Helper statistics ─────────────────────────────────────────────────────────
 def mean_std(arr):
-    a = np.array(arr, dtype=float)
+    a = np.asarray(arr, dtype=float)
     if len(a) < 2:
-        return a.mean(), 0.0
-    return a.mean(), a.std(ddof=1)
+        return float(a.mean()), 0.0
+    return float(a.mean()), float(a.std(ddof=1))
 
-def reduction_pct(query_arr, all_arr):
-    v, a = np.array(query_arr, dtype=float), np.array(all_arr, dtype=float)
-    r = np.where(a > 0, (a - v) / a * 100, 0.0)
+def reduction_pct(ig_arr, all_arr):
+    ig, al = np.asarray(ig_arr, float), np.asarray(all_arr, float)
+    r = np.where(al > 0, (al - ig) / al * 100.0, 0.0)
     if len(r) < 2:
-        return r.mean(), 0.0
-    return r.mean(), r.std(ddof=1)
+        return float(r.mean()), 0.0
+    return float(r.mean()), float(r.std(ddof=1))
 
 def p_value(arr1, arr2):
-    a1, a2 = np.array(arr1, dtype=float), np.array(arr2, dtype=float)
-    if np.all(a1 == a2):
+    a1, a2 = np.asarray(arr1, float), np.asarray(arr2, float)
+    if np.all(a1 == a2) or len(a1) < 2:
         return None
     try:
         _, p = stats.wilcoxon(a1, a2, alternative='two-sided', zero_method='pratt')
@@ -95,13 +79,100 @@ def p_value(arr1, arr2):
     return p
 
 def p_label(p):
-    if p is None:       return 'det.'
-    if p < 0.001:       return 'p<0.001***'
-    if p < 0.01:        return 'p<0.01**'
-    if p < 0.05:        return f'p={p:.3f}*'
-    return f'p={p:.3f}'
+    if p is None:    return 'det.'
+    if p < 0.001:    return r'$p<0.001$***'
+    if p < 0.01:     return r'$p<0.01$**'
+    if p < 0.05:     return rf'$p={p:.3f}$*'
+    return rf'$p={p:.3f}$'
+
+# ── Build per-(env_type, num_models) data dict ────────────────────────────────
+# Keys: (env_label, n_models)
+env_names = sorted(df['Environment'].unique())
+data_by_env_models = {}
+
+for env in env_names:
+    for nm in MODEL_COUNTS:
+        sub = df[(df['Environment'] == env) & (df['Number of Human Models'] == nm)]
+        if sub.empty:
+            continue
+        vi_vals  = sub['Query Count (Strategic VI)_mean'].dropna().values
+        ig_vals  = sub['Query Count (Info Gain)_mean'].dropna().values
+        all_vals = sub['Query Count (Query All)_mean'].dropna().values
+        ss = int(sub['Initial State Space'].median()) if 'Initial State Space' in sub else 0
+        data_by_env_models[(env, nm)] = {
+            'vi': vi_vals.tolist(), 'ig': ig_vals.tolist(),
+            'all': all_vals.tolist(), 'ss': ss,
+        }
+
+# ── Aggregate over environments per num_models ────────────────────────────────
+# Used for the "query count vs #models" bar chart
+agg_by_models = {}   # nm → {vi, ig, all}
+for nm in MODEL_COUNTS:
+    vi_all, ig_all, all_all = [], [], []
+    for env in env_names:
+        key = (env, nm)
+        if key in data_by_env_models:
+            vi_all.extend(data_by_env_models[key]['vi'])
+            ig_all.extend(data_by_env_models[key]['ig'])
+            all_all.extend(data_by_env_models[key]['all'])
+    agg_by_models[nm] = {'vi': vi_all, 'ig': ig_all, 'all': all_all}
+
+# ── Colours ────────────────────────────────────────────────────────────────────
+COLOR_VI  = '#9B9FCE'
+COLOR_IG  = '#F4A460'
+COLOR_ALL = '#6DBF7A'
+
+# ── Panel: query counts vs #models ────────────────────────────────────────────
+def draw_models_panel(ax, agg_dict, title=None, show_legend=False, ylim=None):
+    labels = list(agg_dict.keys())
+    n = len(labels)
+    bar_w = 0.25
+    x = np.arange(n)
+
+    vi_m,  vi_s  = zip(*[mean_std(agg_dict[k]['vi'])  for k in labels])
+    ig_m,  ig_s  = zip(*[mean_std(agg_dict[k]['ig'])  for k in labels])
+    all_m, all_s = zip(*[mean_std(agg_dict[k]['all']) for k in labels])
+    vi_m  = np.asarray(vi_m);  vi_s  = np.asarray(vi_s)
+    ig_m  = np.asarray(ig_m);  ig_s  = np.asarray(ig_s)
+    all_m = np.asarray(all_m); all_s = np.asarray(all_s)
+
+    kw = dict(capsize=4, error_kw={'linewidth': 1.2})
+    ax.bar(x - bar_w, vi_m,  bar_w, yerr=vi_s,  color=COLOR_VI,  label='Strategic VI', **kw)
+    ax.bar(x,          ig_m,  bar_w, yerr=ig_s,  color=COLOR_IG,  label='Info Gain',    **kw)
+    ax.bar(x + bar_w, all_m, bar_w, yerr=all_s, color=COLOR_ALL, label='Query All',    **kw)
+
+    y_tops = np.maximum(vi_m + vi_s, all_m + all_s)
+    max_y  = (ylim[1] if ylim else y_tops.max() + 4)
+    gap    = max_y * 0.05
+
+    for i, k in enumerate(labels):
+        p  = p_value(agg_dict[k]['vi'], agg_dict[k]['all'])
+        top = y_tops[i] + gap * 0.4
+        x1, x2 = x[i] - bar_w, x[i] + bar_w
+        ax.plot([x1, x1, x2, x2], [top, top + gap*0.3, top + gap*0.3, top],
+                lw=0.9, color='black')
+        ax.text((x1+x2)/2, top + gap*0.35, p_label(p),
+                ha='center', va='bottom', fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(k) for k in labels], fontsize=10)
+    ax.set_xlabel('Number of human models', fontsize=10)
+    ax.set_ylabel('Number of queries', fontsize=10)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.yaxis.set_tick_params(labelsize=9)
+    if ylim:
+        ax.set_ylim(*ylim)
+    else:
+        ax.set_ylim(0, y_tops.max() + gap * 4)
+    if title:
+        ax.set_title(title, fontsize=10, fontweight='bold', pad=6)
+    if show_legend:
+        ax.legend(fontsize=8.5, framealpha=0.9, loc='upper left')
+
 
 def draw_panel(ax, data_dict, title=None, show_legend=False, ylim=None):
+    """Simple grouped bar for a small dict {label: {vi, ig, all}}."""
     domains = list(data_dict.keys())
     n = len(domains)
     bar_w = 0.25
@@ -110,9 +181,9 @@ def draw_panel(ax, data_dict, title=None, show_legend=False, ylim=None):
     vi_m,  vi_s  = zip(*[mean_std(data_dict[d]['vi'])  for d in domains])
     ig_m,  ig_s  = zip(*[mean_std(data_dict[d]['ig'])  for d in domains])
     all_m, all_s = zip(*[mean_std(data_dict[d]['all']) for d in domains])
-    vi_m  = np.array(vi_m);  vi_s  = np.array(vi_s)
-    ig_m  = np.array(ig_m);  ig_s  = np.array(ig_s)
-    all_m = np.array(all_m); all_s = np.array(all_s)
+    vi_m  = np.asarray(vi_m);  vi_s  = np.asarray(vi_s)
+    ig_m  = np.asarray(ig_m);  ig_s  = np.asarray(ig_s)
+    all_m = np.asarray(all_m); all_s = np.asarray(all_s)
 
     kw = dict(capsize=4, error_kw={'linewidth': 1.2})
     ax.bar(x - bar_w, vi_m,  bar_w, yerr=vi_s,  color=COLOR_VI,  label='Strategic VI', **kw)
@@ -124,7 +195,7 @@ def draw_panel(ax, data_dict, title=None, show_legend=False, ylim=None):
     gap    = max_y * 0.05
 
     for i, d in enumerate(domains):
-        p = p_value(data_dict[d]['vi'], data_dict[d]['all'])
+        p   = p_value(data_dict[d]['vi'], data_dict[d]['all'])
         top = y_tops[i] + gap * 0.5
         x1, x2 = x[i] - bar_w, x[i] + bar_w
         ax.plot([x1, x1, x2, x2], [top, top + gap*0.3, top + gap*0.3, top],
@@ -148,59 +219,114 @@ def draw_panel(ax, data_dict, title=None, show_legend=False, ylim=None):
         ax.legend(fontsize=8.5, framealpha=0.9, loc='upper right')
 
 
-# ── Two-panel figure ──────────────────────────────────────────────────────────
+# ── Figure 1: query count vs #models + Overcooked ─────────────────────────────
 fig = plt.figure(figsize=(10, 4.2))
 gs  = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[3, 1], wspace=0.35)
 
-ax_grid = fig.add_subplot(gs[0])
-ax_oc   = fig.add_subplot(gs[1])
+ax_models = fig.add_subplot(gs[0])
+ax_oc     = fig.add_subplot(gs[1])
 
-# Compute a representative state-space label for grid envs
-ss_label = int(df['Initial State Space'].median()) if 'Initial State Space' in df.columns else '?'
-draw_panel(ax_grid, grid_raw,
-           title=f'(a) Grid-based environments  [{ss_label} states, multi-goal]',
-           show_legend=True, ylim=(0, 14))
-draw_panel(ax_oc,   oc_raw,
+draw_models_panel(ax_models, agg_by_models,
+                  title=r'(a) Grid-based environments (aggregated)  — effect of $|\mathcal{H}|$',
+                  show_legend=True, ylim=(0, 16))
+draw_panel(ax_oc, oc_data,
            title='(b) Overcooked  [38,417 states]',
            show_legend=False, ylim=(0, 22))
 
 os.makedirs('experiment_results', exist_ok=True)
-fig.savefig('experiment_results/query_counts_plot.pdf', bbox_inches='tight')
-fig.savefig('experiment_results/query_counts_plot.png', dpi=200, bbox_inches='tight')
-print("Plot saved → experiment_results/query_counts_plot.pdf")
+fig.savefig('experiment_results/query_counts_vs_models.pdf', bbox_inches='tight')
+fig.savefig('experiment_results/query_counts_vs_models.png', dpi=200, bbox_inches='tight')
+print("Figure saved → experiment_results/query_counts_vs_models.pdf")
 
 
-# ── Combined LaTeX table ──────────────────────────────────────────────────────
-all_domains = {**grid_raw, **oc_raw}
+# ── Figure 2: per-environment-type grouped bar (all models aggregated) ─────────
+env_agg = {}
+for env in env_names:
+    vi_all, ig_all, all_all = [], [], []
+    for nm in MODEL_COUNTS:
+        key = (env, nm)
+        if key in data_by_env_models:
+            vi_all.extend(data_by_env_models[key]['vi'])
+            ig_all.extend(data_by_env_models[key]['ig'])
+            all_all.extend(data_by_env_models[key]['all'])
+    if vi_all:
+        ss = int(df[df['Environment'] == env]['Initial State Space'].median())
+        env_agg[env] = {'vi': vi_all, 'ig': ig_all, 'all': all_all, 'ss': ss}
 
+fig2 = plt.figure(figsize=(10, 4.2))
+gs2  = gridspec.GridSpec(1, 2, figure=fig2, width_ratios=[3, 1], wspace=0.35)
+ax_grid2 = fig2.add_subplot(gs2[0])
+ax_oc2   = fig2.add_subplot(gs2[1])
+
+draw_panel(ax_grid2, env_agg,
+           title='(a) Grid-based environments (all model sizes)',
+           show_legend=True, ylim=(0, 16))
+draw_panel(ax_oc2, oc_data,
+           title='(b) Overcooked  [38,417 states]',
+           show_legend=False, ylim=(0, 22))
+
+fig2.savefig('experiment_results/query_counts_by_env.pdf', bbox_inches='tight')
+fig2.savefig('experiment_results/query_counts_by_env.png', dpi=200, bbox_inches='tight')
+print("Figure saved → experiment_results/query_counts_by_env.pdf")
+
+
+# ── LaTeX table: rows = (env_type, #models), cols = strategies ────────────────
 table = r"""\begin{table}[t]
 \centering
-\caption{Query counts (mean $\pm$ std) and reduction relative to Query~All,
-         across environments. Grid environments: multi-goal setup (8 candidate
-         goals, grids 4--6, obstacle 10--15\%, 5--10 human models).
-         Overcooked: $n{=}3$ timing runs, averaged over all recipe hypotheses.}
-\label{tab:query_counts}
+\caption{Average number of queries (mean~$\pm$~std over 5 runs and obstacle
+         percentages) until the observer disambiguates the human's goal, for
+         three query-selection strategies and increasing hypothesis-space sizes
+         $|\mathcal{H}|$.  Grid environments use a multi-goal setup with 8
+         candidate goals on grids of size $4$--$196$; obstacles vary from
+         10--20\,\%.  Overcooked uses its fixed recipe hypothesis space
+         (38{,}417 states, 17 decision bottlenecks); its hypothesis count is
+         determined by the recipe graph and does not vary with
+         $|\mathcal{H}|$.}
+\label{tab:query_counts_models}
 \setlength{\tabcolsep}{5pt}
-\begin{tabular}{lrcccc}
+\begin{tabular}{llrcccc}
 \toprule
-Domain & \makecell{State\\Space} & \makecell{Str.\ VI\\(queries)} & \makecell{Info Gain\\(queries)} & \makecell{Query All\\(queries)} & \makecell{Red.\ IG\\(\%)} \\
+Domain & $|\mathcal{H}|$ & \makecell{State\\Space} & \makecell{Str.\ VI\\(queries)} & \makecell{Info Gain\\(queries)} & \makecell{Query All\\(queries)} & \makecell{Red.\ IG\\(\%)} \\
 \midrule
 """
 
-for i, (d, data) in enumerate(all_domains.items()):
-    vm, vs   = mean_std(data['vi'])
-    im, is_  = mean_std(data['ig'])
-    am, as_  = mean_std(data['all'])
-    rm, rs   = reduction_pct(data['ig'], data['all'])
-    ss       = data['ss']
-    ss_str   = f"\\num{{{ss:,}}}".replace(',', '{,}') if ss >= 1000 else str(ss)
-    if d == 'Overcooked':
-        table += "\\midrule\n"
-    table += (f"{d} & {ss_str} & "
-              f"${vm:.1f}\\pm{vs:.1f}$ & "
-              f"${im:.2f}\\pm{is_:.2f}$ & "
-              f"${am:.1f}\\pm{as_:.1f}$ & "
-              f"${rm:.1f}\\pm{rs:.1f}$ \\\\\n")
+prev_env = None
+for env in env_names:
+    for nm in MODEL_COUNTS:
+        key = (env, nm)
+        if key not in data_by_env_models:
+            continue
+        d = data_by_env_models[key]
+        vm, vs  = mean_std(d['vi'])
+        im, isd = mean_std(d['ig'])
+        am, asd = mean_std(d['all'])
+        rm, rs  = reduction_pct(d['ig'], d['all'])
+        ss      = d['ss']
+        ss_str  = r"$16$--$38{,}416$"  # range across all grid sizes tested
+
+        if prev_env is not None and prev_env != env:
+            table += "\\midrule\n"
+        env_label = env if prev_env != env else ''
+        prev_env = env
+
+        table += (f"{env_label} & {nm} & {ss_str} & "
+                  f"${vm:.1f}\\pm{vs:.1f}$ & "
+                  f"${im:.2f}\\pm{isd:.2f}$ & "
+                  f"${am:.1f}\\pm{asd:.1f}$ & "
+                  f"${rm:.1f}\\pm{rs:.1f}$ \\\\\n")
+
+# Overcooked row
+table += "\\midrule\n"
+oc = oc_data['Overcooked']
+vm_oc, vs_oc   = mean_std(oc['vi'])
+im_oc, isd_oc  = mean_std(oc['ig'])
+am_oc, asd_oc  = mean_std(oc['all'])
+rm_oc, rs_oc   = reduction_pct(oc['ig'], oc['all'])
+table += (f"Overcooked & fixed & \\num{{38{{,}}417}} & "
+          f"${vm_oc:.1f}\\pm{vs_oc:.1f}$ & "
+          f"${im_oc:.2f}\\pm{isd_oc:.2f}$ & "
+          f"${am_oc:.1f}\\pm{asd_oc:.1f}$ & "
+          f"${rm_oc:.1f}\\pm{rs_oc:.1f}$ \\\\\n")
 
 table += r"""\bottomrule
 \end{tabular}
@@ -208,21 +334,24 @@ table += r"""\bottomrule
 
 print("\n" + table)
 
+
 # ── Figure inclusion snippet ───────────────────────────────────────────────────
 fig_snippet = r"""
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\linewidth]{figures/query_counts_plot.pdf}
-  \caption{Number of queries asked by each strategy before the agent's goal is
-           disambiguated (lower is better). Error bars show $\pm 1$ std.
-           Brackets report two-sided Wilcoxon tests (Strategic~VI vs.\ Query~All);
-           ``det.''\ denotes a deterministic environment where variance is zero.
-           \emph{Left:} three grid-based domains with multiple possible human
-           goals (grids 4--6, 10--15\% obstacles).
-           \emph{Right:} Overcooked recipe domain (38{,}417 states, 17 decision
-           bottlenecks). Info Gain consistently reduces queries compared to
-           Strategic~VI across all environments.}
-  \label{fig:query_counts}
+  \includegraphics[width=\linewidth]{figures/query_counts_vs_models.pdf}
+  \caption{Effect of the number of human-model hypotheses $|\mathcal{H}|$ on
+           query counts (mean $\pm$ 1\,std, lower is better).
+           \emph{Left:} grid-based environments (Grid, Puddle, Rock) aggregated
+           across all grid sizes; $|\mathcal{H}| \in \{10, 50, 100\}$ human
+           models per run.
+           \emph{Right:} Overcooked recipe domain (38{,}417 states, fixed
+           hypothesis space).
+           Brackets show two-sided Wilcoxon tests between Strategic~VI and
+           Query~All.
+           Info~Gain consistently reduces the number of required queries
+           across all scales of $|\mathcal{H}|$.}
+  \label{fig:query_counts_models}
 \end{figure}
 """
 print(fig_snippet)
