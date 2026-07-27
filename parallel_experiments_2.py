@@ -40,6 +40,7 @@ from overcooked_env import (
     get_human_bottleneck_mask,
     simulate_overcooked_vi,
     simulate_overcooked_info_gain,
+    simulate_overcooked_random,
     NUM_POT as OVERCOOKED_NUM_POT,
     SERVE_ACTION as OVERCOOKED_SERVE_ACTION,
     CLIENT_SERVED as OVERCOOKED_CLIENT_SERVED,
@@ -498,6 +499,7 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
         "no_pruning": {"times": [], "checks": [], "subsets": []},
         "query_counts": [],
         "information_gain_counts": [],
+        "random_counts": [],
         "query_all_counts": [],
         "human_bottlenecks": [],
         "initial_mdp_state_space_sizes": [],
@@ -538,9 +540,10 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
 
     for trial_idx in range(num_trials):
         subset_idx   = rng.choice(n_recipes, size=k_sample, replace=False)
-        trial_masks  = [all_human_masks[i] for i in subset_idx]
-        vi_counts    = [simulate_overcooked_vi(qnet, hm)            for hm in trial_masks]
-        ig_counts    = [simulate_overcooked_info_gain(I_decoded, hm) for hm in trial_masks]
+        trial_masks   = [all_human_masks[i] for i in subset_idx]
+        vi_counts     = [simulate_overcooked_vi(qnet, hm)             for hm in trial_masks]
+        ig_counts     = [simulate_overcooked_info_gain(I_decoded, hm)  for hm in trial_masks]
+        rand_counts   = [simulate_overcooked_random(I_decoded, hm, rng) for hm in trial_masks]
 
         results["determinizing_mdp_times"].append(determinizing_mdp_time)
         results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
@@ -557,6 +560,7 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
         results["human_bottlenecks"].append(len(B_filter))
         results["query_counts"].append(float(np.mean(vi_counts)))
         results["information_gain_counts"].append(float(np.mean(ig_counts)))
+        results["random_counts"].append(float(np.mean(rand_counts)))
         results["query_all_counts"].append(float(all_count))
 
     gc.collect()
@@ -643,6 +647,7 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                 "query_counts": [],
                 "information_gain_counts": [],
+                "random_counts": [],
                 "query_all_counts": [],
                 "human_bottlenecks": [],
                 "initial_mdp_state_space_sizes": [],
@@ -695,8 +700,10 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                                               target=goal_i, start=start_state)
                     for T_H, goal_i in zip(M_H_list, human_goal_idxs)
                 ]
-            vi_counts  = [simulate_overcooked_vi(qnet, hm)            for hm in human_masks]
-            ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm) for hm in human_masks]
+            trial_rng  = np.random.default_rng(trial_seed + trial)
+            vi_counts  = [simulate_overcooked_vi(qnet, hm)                         for hm in human_masks]
+            ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm)              for hm in human_masks]
+            rand_counts= [simulate_overcooked_random(I_decoded, hm, trial_rng)      for hm in human_masks]
 
             results["bottleneck_finding_times"].append(bottleneck_time)
             results["maximal_achievable_pruning_times"].append(maximal_time)
@@ -708,8 +715,9 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             results["policy_computation_pruning_times"].append(policy_time)
             results["policy_computation_no_pruning_times"].append(policy_time)
             results["human_bottlenecks"].append(len(B_filter))
-            results["query_counts"].append(float(np.mean(vi_counts)) if vi_counts else 0.0)
-            results["information_gain_counts"].append(float(np.mean(ig_counts)) if ig_counts else 0.0)
+            results["query_counts"].append(float(np.mean(vi_counts))   if vi_counts   else 0.0)
+            results["information_gain_counts"].append(float(np.mean(ig_counts))   if ig_counts   else 0.0)
+            results["random_counts"].append(float(np.mean(rand_counts)) if rand_counts else 0.0)
             results["query_all_counts"].append(float(len(B_filter)))
 
             gc.collect()
@@ -722,7 +730,7 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_available_world_types():
     """Get available world types based on platform and dependencies"""
-    base_worlds = ['grid', 'puddle', 'rock', 'overcooked']
+    base_worlds = ['grid', 'puddle', 'rock', 'four_rooms', 'overcooked']
 
     if not IS_MACOS:
         base_worlds.append('taxi')
@@ -848,6 +856,7 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                                 "query_counts": [],
                                 "information_gain_counts": [],
+                                "random_counts": [],
                                 "query_all_counts": [],
                                 "human_bottlenecks": [],
                                 "initial_mdp_state_space_sizes": [],
@@ -891,6 +900,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
         'Runtime Improvement (%)': [],
         'Query Count (Strategic VI)': [],
         'Query Count (Info Gain)': [],
+        'Query Count (Random)': [],
         'Query Count (Query All)': [],
         'Human Bottlenecks': [],
         'Initial State Space': [],
@@ -1000,6 +1010,7 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             for col, key in [
                 ('Query Count (Strategic VI)', 'query_counts'),
                 ('Query Count (Info Gain)',    'information_gain_counts'),
+                ('Query Count (Random)',       'random_counts'),
                 ('Query Count (Query All)',    'query_all_counts'),
             ]:
                 vals = results.get(key, [])

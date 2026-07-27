@@ -907,3 +907,61 @@ def simulate_overcooked_info_gain(I_decoded: list, human_mask: int) -> int:
         count += 1
 
     return count
+
+
+def simulate_overcooked_random(I_decoded: list, human_mask: int,
+                                rng: "np.random.Generator") -> int:
+    """
+    Simulate a uniformly-random query policy: at each step pick an unqueried
+    bottleneck at random.  Uses the same termination criterion as Info~Gain.
+
+    Parameters
+    ----------
+    I_decoded  : list of lists of bottleneck tuples
+    human_mask : bitmask from get_human_bottleneck_mask
+    rng        : numpy random Generator (for reproducibility)
+
+    Returns
+    -------
+    int  number of queries asked before termination
+    """
+    unique_B = sorted(set(tuple(b) for subset in I_decoded for b in subset))
+    n        = len(unique_B)
+    FULL_MASK = (1 << n) - 1
+
+    target_masks = []
+    for subset in I_decoded:
+        m = 0
+        for b in subset:
+            m |= 1 << unique_B.index(tuple(b))
+        target_masks.append(m)
+
+    K_I   = 0
+    K_not = 0
+    count = 0
+
+    for _ in range(n + 1):
+        used      = K_I | K_not
+        unqueried = FULL_MASK & ~used
+        I_hat     = K_I | unqueried
+
+        if any(I_hat == t for t in target_masks):
+            break
+
+        consistent = [t for t in target_masks
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        candidates = [i for i in range(n) if not ((used >> i) & 1)]
+        if not candidates:
+            break
+        bit = int(rng.choice(candidates))
+
+        if (human_mask >> bit) & 1:
+            K_I   |= (1 << bit)
+        else:
+            K_not |= (1 << bit)
+        count += 1
+
+    return count
