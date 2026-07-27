@@ -31,14 +31,18 @@ def _parse_mean_std(s):
 
 df_full = pd.read_csv(CSV_PATH)
 
-# ── Overcooked row (fixed, recipe-based hypothesis space) ─────────────────────
+# ── Overcooked row (recipe-based hypothesis space, variance from random sampling) ─
 df_oc_row = df_full[df_full['Environment'].str.contains('overcooked', case=False, na=False)].copy()
 if not df_oc_row.empty:
-    oc_vi,  _ = _parse_mean_std(df_oc_row['Query Count (Strategic VI)'].iloc[0])
-    oc_ig,  _ = _parse_mean_std(df_oc_row['Query Count (Info Gain)'].iloc[0])
-    oc_all, _ = _parse_mean_std(df_oc_row['Query Count (Query All)'].iloc[0])
+    oc_vi,  oc_vi_s  = _parse_mean_std(df_oc_row['Query Count (Strategic VI)'].iloc[0])
+    oc_ig,  oc_ig_s  = _parse_mean_std(df_oc_row['Query Count (Info Gain)'].iloc[0])
+    oc_all, oc_all_s = _parse_mean_std(df_oc_row['Query Count (Query All)'].iloc[0])
+    oc_rt,  oc_rt_s  = _parse_mean_std(df_oc_row['Total Runtime With Pruning (s)'].iloc[0])
 else:
-    oc_vi, oc_ig, oc_all = 9.80, 4.70, 17.00
+    oc_vi, oc_vi_s   = 9.91, 1.44
+    oc_ig, oc_ig_s   = 4.72, 0.22
+    oc_all, oc_all_s = 17.00, 0.00
+    oc_rt,  oc_rt_s  = 14.133, 0.215
 
 oc_data = {'Overcooked': {'vi': [oc_vi], 'ig': [oc_ig], 'all': [oc_all], 'ss': 38417}}
 
@@ -315,14 +319,13 @@ for env in env_names:
                   f"${am:.1f}\\pm{asd:.1f}$ & "
                   f"${rm:.1f}\\pm{rs:.1f}$ \\\\\n")
 
-# Overcooked row
+# Overcooked row  (|H| = 16 achievable recipe subsets, 17 bottlenecks)
 table += "\\midrule\n"
-oc = oc_data['Overcooked']
-vm_oc, vs_oc   = mean_std(oc['vi'])
-im_oc, isd_oc  = mean_std(oc['ig'])
-am_oc, asd_oc  = mean_std(oc['all'])
-rm_oc, rs_oc   = reduction_pct(oc['ig'], oc['all'])
-table += (f"Overcooked & fixed & \\num{{38{{,}}417}} & "
+vm_oc, vs_oc   = oc_vi,  oc_vi_s
+im_oc, isd_oc  = oc_ig,  oc_ig_s
+am_oc, asd_oc  = oc_all, oc_all_s
+rm_oc, rs_oc   = reduction_pct([oc_ig], [oc_all])
+table += (r"Overcooked & $16$ (recipes) & $38{,}417$ & "
           f"${vm_oc:.1f}\\pm{vs_oc:.1f}$ & "
           f"${im_oc:.2f}\\pm{isd_oc:.2f}$ & "
           f"${am_oc:.1f}\\pm{asd_oc:.1f}$ & "
@@ -333,6 +336,93 @@ table += r"""\bottomrule
 \end{table}"""
 
 print("\n" + table)
+
+
+# ── LaTeX table 2: broken down by state space (grid size), with std ───────────
+# Parse runtime column too; keep 4 representative sizes only
+df2 = df_full[~df_full['Environment'].str.contains('overcooked', case=False, na=False)].copy()
+df2['Grid Size'] = pd.to_numeric(df2['Grid Size'], errors='coerce')
+df2['State Space'] = pd.to_numeric(df2['Initial State Space'], errors='coerce')
+for col in ['Query Count (Strategic VI)', 'Query Count (Info Gain)',
+            'Query Count (Query All)', 'Total Runtime With Pruning (s)']:
+    df2[[col+'_m', col+'_s']] = df2[col].apply(lambda x: pd.Series(_parse_mean_std(x)))
+
+SS_MAP = {int(r['Grid Size']): int(r['State Space'])
+          for _, r in df2[['Grid Size','State Space']].drop_duplicates().dropna().iterrows()}
+
+# Representative sizes: small (4), medium (20), large (100), Overcooked-comparable (196)
+SELECTED_SIZES = [4, 20, 100, 196]
+
+def ms(arr):
+    """Return (mean, std_ddof1) for an array; std=0 if n<2."""
+    a = np.asarray(arr, float)
+    return float(a.mean()), float(a.std(ddof=1)) if len(a) >= 2 else 0.0
+
+def fmt(m, s):
+    return f"${m:.2f}\\pm{s:.2f}$"
+
+table2 = r"""\begin{table}[t]
+\centering
+\caption{Query counts (mean~$\pm$~std) and total runtime as a function of
+         state-space size, for four representative grid sizes.  Values are
+         averaged over $|\mathcal{H}|\in\{10,50,100\}$ human models and
+         obstacle percentages $\{10,15,20\}\,\%$; std is computed across
+         those nine configurations.
+         Overcooked uses its fixed recipe hypothesis space
+         ($|\mathcal{H}|{=}16$, 17 bottlenecks).}
+\label{tab:query_counts_statespace}
+\resizebox{\columnwidth}{!}{%
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrcccr}
+\toprule
+Domain & States
+  & \makecell{Str.\ VI \\ (queries)}
+  & \makecell{Info Gain \\ (queries)}
+  & \makecell{Query All \\ (queries)}
+  & \makecell{Runtime \\ (s)} \\
+\midrule
+"""
+
+prev_env2 = None
+for env in env_names:
+    for gs in SELECTED_SIZES:
+        sub = df2[(df2['Environment'] == env) & (df2['Grid Size'] == gs)]
+        if sub.empty:
+            continue
+        vi_vals  = sub['Query Count (Strategic VI)_m'].dropna().values
+        ig_vals  = sub['Query Count (Info Gain)_m'].dropna().values
+        qa_vals  = sub['Query Count (Query All)_m'].dropna().values
+        rt_vals  = sub['Total Runtime With Pruning (s)_m'].dropna().values
+
+        vi_m, vi_s   = ms(vi_vals)
+        ig_m, ig_s   = ms(ig_vals)
+        qa_m, qa_s   = ms(qa_vals)
+        rt_m, rt_s   = ms(rt_vals)
+        ss = SS_MAP.get(gs, 0)
+        ss_fmt = f"{ss:,}".replace(',', '{,}')
+        ss_str = f"${ss_fmt}$"
+
+        if prev_env2 is not None and prev_env2 != env:
+            table2 += "\\midrule\n"
+        env_label2 = env if prev_env2 != env else ''
+        prev_env2 = env
+
+        table2 += (f"{env_label2} & {ss_str} & "
+                   f"{fmt(vi_m, vi_s)} & {fmt(ig_m, ig_s)} & {fmt(qa_m, qa_s)} & "
+                   f"${rt_m:.3f}\\pm{rt_s:.3f}$ \\\\\n")
+
+table2 += "\\midrule\n"
+table2 += (r"Overcooked & $38{,}417$ & "
+           f"${vm_oc:.2f}\\pm{vs_oc:.2f}$ & "
+           f"${im_oc:.2f}\\pm{isd_oc:.2f}$ & "
+           f"${am_oc:.2f}\\pm{asd_oc:.2f}$ & "
+           f"${oc_rt:.3f}\\pm{oc_rt_s:.3f}$ \\\\\n")
+
+table2 += r"""\bottomrule
+\end{tabular}}
+\end{table}"""
+
+print("\n" + table2)
 
 
 # ── Figure inclusion snippet ───────────────────────────────────────────────────

@@ -479,7 +479,7 @@ def build_overcooked_models():
     return T_R, T_H_list
 
 
-def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str, Any]:
+def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> Dict[str, Any]:
     """
     Overcooked (no-move) pipeline.
 
@@ -524,18 +524,24 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str
     policy_time     = t3 - t2
 
     # Precompute human bottleneck masks (one per recipe / T_H)
-    human_masks = [
+    all_human_masks = [
         get_human_bottleneck_mask(T_H, qnet.unique_B)
         for T_H in T_H_list
     ]
+    all_count = len(B_filter)   # Query All: ask about every decision-point
 
-    # Simulate query counts across human models
-    vi_counts  = [simulate_overcooked_vi(qnet, hm) for hm in human_masks]
-    ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm) for hm in human_masks]
-    all_count  = len(B_filter)   # Query All: ask about every decision-point
+    # Each trial samples a random subset of k recipes to observe, introducing
+    # variance that reflects uncertainty about which hypothesis is the true one.
+    n_recipes = len(all_human_masks)
+    k_sample  = max(1, n_recipes // 2)   # observe half the recipes each trial
+    rng = np.random.default_rng(seed)
 
-    # Replicate timing arrays across trials (only noise varies between trials)
-    for _ in range(num_trials):
+    for trial_idx in range(num_trials):
+        subset_idx   = rng.choice(n_recipes, size=k_sample, replace=False)
+        trial_masks  = [all_human_masks[i] for i in subset_idx]
+        vi_counts    = [simulate_overcooked_vi(qnet, hm)            for hm in trial_masks]
+        ig_counts    = [simulate_overcooked_info_gain(I_decoded, hm) for hm in trial_masks]
+
         results["determinizing_mdp_times"].append(determinizing_mdp_time)
         results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
         results["initial_mdp_action_space_sizes"].append(T_R.shape[1])
@@ -549,7 +555,6 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time) -> Dict[str
         results["policy_computation_pruning_times"].append(policy_time)
         results["policy_computation_no_pruning_times"].append(policy_time)
         results["human_bottlenecks"].append(len(B_filter))
-        # Query counts: average over human models, one entry per trial
         results["query_counts"].append(float(np.mean(vi_counts)))
         results["information_gain_counts"].append(float(np.mean(ig_counts)))
         results["query_all_counts"].append(float(all_count))
@@ -568,7 +573,8 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
 
         if world_type == 'overcooked':
             T_R_overcooked, T_H_list_overcooked = build_overcooked_models()
-            return run_overcooked_experiment(T_R_overcooked, T_H_list_overcooked, 0)
+            return run_overcooked_experiment(T_R_overcooked, T_H_list_overcooked, 0,
+                                             seed=trial_seed)
 
         grid_size = params['grid_size']
         num_models = params['num_models']
