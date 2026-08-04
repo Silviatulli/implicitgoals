@@ -909,6 +909,301 @@ def simulate_overcooked_info_gain(I_decoded: list, human_mask: int) -> int:
     return count
 
 
+def _build_target_masks(I_decoded):
+    """Helper: convert I_decoded list of bottleneck-tuples into (unique_B, target_masks, n)."""
+    unique_B     = sorted(set(tuple(b) for subset in I_decoded for b in subset))
+    n            = len(unique_B)
+    idx          = {b: i for i, b in enumerate(unique_B)}
+    target_masks = []
+    for subset in I_decoded:
+        m = 0
+        for b in subset:
+            m |= 1 << idx[tuple(b)]
+        target_masks.append(m)
+    return unique_B, target_masks, n
+
+
+def _build_dominance(target_masks, n):
+    """
+    Build the dominance relation for Hypothesis 2 (Structural Redundancy).
+
+    dominates[b2] = list of b1 such that b1 ⪯ b2, i.e.
+        ∀ϕ ∈ Φ : b1 ∈ ϕ  ⟹  b2 ∈ ϕ
+    Semantics: if b2 ∉ IG (oracle answers No), then b1 ∉ IG too — for free.
+    """
+    dominates: dict[int, list[int]] = {b2: [] for b2 in range(n)}
+    for b1 in range(n):
+        for b2 in range(n):
+            if b1 == b2:
+                continue
+            # b1 ⪯ b2: no target has b1=1 and b2=0
+            if not any(((m >> b1) & 1) and not ((m >> b2) & 1) for m in target_masks):
+                dominates[b2].append(b1)
+    return dominates
+
+
+def _propagate_dominance(K_not: int, dominates: dict, n: int) -> int:
+    """Transitively propagate negative responses via dominance entailments."""
+    changed = True
+    while changed:
+        changed = False
+        for b2 in range(n):
+            if (K_not >> b2) & 1:
+                for b1 in dominates[b2]:
+                    if not ((K_not >> b1) & 1):
+                        K_not |= (1 << b1)
+                        changed = True
+    return K_not
+
+
+def simulate_overcooked_transition(
+        qnet: "ExactQNet",
+        I_decoded: list,
+        human_mask: int) -> int:
+    """
+    Simulate the Transition condition (Hypothesis 2: Structural Redundancy).
+
+    Uses the same Strategic VI policy as the baseline for query *selection*,
+    but propagates the bottleneck-dominance entailment
+        b2 ∉ IG  ⟹  b1 ∉ IG  (whenever  ∀ϕ, b1 ∈ ϕ ⟹ b2 ∈ ϕ)
+    after every negative oracle response, ruling out dominated bottlenecks
+    for *free* (without incrementing the query counter).
+
+    Parameters
+    ----------
+    qnet       : ExactQNet from solve_query_mdp_exact
+    I_decoded  : list of bottleneck-subset lists (for dominance graph)
+    human_mask : bitmask from get_human_bottleneck_mask
+
+    Returns
+    -------
+    int  number of paid queries until unique disambiguation
+    """
+    _, target_masks, n = _build_target_masks(I_decoded)
+    dominates = _build_dominance(target_masks, n)
+
+    POW3         = qnet.POW3
+    qnet_targets = qnet.target_masks
+    K_I          = 0
+    K_not        = 0
+    count        = 0
+
+    for _ in range(n + 1):
+        consistent = [t for t in qnet_targets
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        state_idx = int(np.dot(
+            np.array([(((K_I >> i) & 1) + 2 * ((K_not >> i) & 1)) for i in range(n)],
+                     dtype=np.int64),
+            POW3
+        ))
+        if qnet.failure[state_idx]:
+            break
+
+        action_bitmask = int(qnet.best_action_mask[state_idx])
+        if action_bitmask == 0:
+            used      = K_I | K_not
+            unqueried = [i for i in range(n) if not ((used >> i) & 1)]
+            if not unqueried:
+                break
+            action_idx = unqueried[0]
+        else:
+            action_idx = (action_bitmask & -action_bitmask).bit_length() - 1
+
+        if (human_mask >> action_idx) & 1:
+            K_I   |= (1 << action_idx)
+        else:
+            K_not |= (1 << action_idx)
+            # Propagate dominance entailments — no additional query cost
+            K_not = _propagate_dominance(K_not, dominates, n)
+        count += 1
+
+    return count
+
+
+def simulate_overcooked_proximity(
+        I_decoded: list,
+        human_mask: int,
+        v_star_per_bn: "np.ndarray") -> int:
+    """
+    Simulate the Proximity condition (Hypothesis 3: Goal Proximity).
+
+    Rather than a uniform prior over consistent hypotheses, uses a
+    temperature-τ=1 softmax prior weighted by the size-normalised
+    average of V*_MR over each hypothesis's bottlenecks:
+
+        ψ(ϕ) = (1/|ϕ|) Σ_{b∈ϕ} V*_MR(b)
+        p_τ(ϕ) ∝ exp(ψ(ϕ)/τ),  τ = 1
+
+    Query selection: pick s⋆ = argmax_s  P_τ(s ∈ IG | consistent).
+
+    Parameters
+    ----------
+    I_decoded      : list of bottleneck-subset lists
+    human_mask     : bitmask from get_human_bottleneck_mask
+    v_star_per_bn  : 1-D array of length len(unique_B); v_star_per_bn[i]
+                     = V*_MR evaluated at the i-th bottleneck in sorted(unique_B)
+
+    Returns
+    -------
+    int  number of queries until unique disambiguation
+    """
+    _, target_masks, n = _build_target_masks(I_decoded)
+    FULL_MASK = (1 << n) - 1
+
+    K_I   = 0
+    K_not = 0
+    count = 0
+
+    for _ in range(n + 1):
+        used      = K_I | K_not
+        unqueried = FULL_MASK & ~used
+        I_hat     = K_I | unqueried
+
+        if any(I_hat == t for t in target_masks):
+            break
+
+        consistent = [t for t in target_masks
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        # ψ(ϕ) for each consistent hypothesis
+        psi = np.array([
+            np.mean([v_star_per_bn[i] for i in range(n) if (t >> i) & 1])
+            if any((t >> i) & 1 for i in range(n)) else 0.0
+            for t in consistent
+        ])
+        psi -= psi.max()                       # numerical stability
+        weights = np.exp(psi)
+        weights /= weights.sum()
+
+        # P_τ(s ∈ IG)
+        p_in_ig = np.zeros(n)
+        for wi, t in zip(weights, consistent):
+            for i in range(n):
+                if (t >> i) & 1:
+                    p_in_ig[i] += wi
+
+        best_bit = -1
+        best_p   = -1.0
+        for i in range(n):
+            if not ((used >> i) & 1) and p_in_ig[i] > best_p:
+                best_p   = p_in_ig[i]
+                best_bit = i
+
+        if best_bit == -1:
+            break
+
+        if (human_mask >> best_bit) & 1:
+            K_I   |= (1 << best_bit)
+        else:
+            K_not |= (1 << best_bit)
+        count += 1
+
+    return count
+
+
+def simulate_overcooked_frequency(I_decoded: list, human_mask: int) -> int:
+    """
+    Simulate Hypothesis 4 (Query Frequency / greedy maximum overlap).
+
+    At each step selects  s⋆ = argmax_s |{ϕ ∈ Φ(B, KI) : s ∈ ϕ}|,
+    i.e.\ the unqueried bottleneck appearing in the most consistent
+    hypotheses — equal to argmax_s P(s ∈ IG) under a uniform prior.
+
+    Parameters
+    ----------
+    I_decoded  : list of bottleneck-subset lists
+    human_mask : bitmask from get_human_bottleneck_mask
+
+    Returns
+    -------
+    int  number of queries until unique disambiguation
+    """
+    _, target_masks, n = _build_target_masks(I_decoded)
+    FULL_MASK = (1 << n) - 1
+
+    K_I   = 0
+    K_not = 0
+    count = 0
+
+    for _ in range(n + 1):
+        used      = K_I | K_not
+        unqueried = FULL_MASK & ~used
+        I_hat     = K_I | unqueried
+
+        if any(I_hat == t for t in target_masks):
+            break
+
+        consistent = [t for t in target_masks
+                      if (K_I & t) == K_I and (K_not & t) == 0]
+        if len(consistent) <= 1:
+            break
+
+        # Count occurrences of each unqueried bottleneck in consistent hypotheses
+        freq = np.zeros(n, dtype=int)
+        for t in consistent:
+            for i in range(n):
+                if ((t >> i) & 1) and not ((used >> i) & 1):
+                    freq[i] += 1
+
+        best_bit = int(np.argmax(freq))
+        if freq[best_bit] == 0:
+            break
+
+        if (human_mask >> best_bit) & 1:
+            K_I   |= (1 << best_bit)
+        else:
+            K_not |= (1 << best_bit)
+        count += 1
+
+    return count
+
+
+def compute_v_star_grid(next_states: "np.ndarray", goal_idx: int,
+                        gamma: float = 0.99) -> "np.ndarray":
+    """
+    Compute V*_MR for a deterministic grid MDP via reverse BFS from goal_idx.
+
+    V*(s) = γ^d(s) where d(s) = shortest-path distance from s to goal_idx.
+    Unreachable states get V*(s) = 0.
+
+    Parameters
+    ----------
+    next_states : (n_states, n_actions) int array — next_states[s,a] = s'
+    goal_idx    : absorbing goal state index
+    gamma       : discount factor
+
+    Returns
+    -------
+    np.ndarray of shape (n_states,) with V*(s) values in [0, 1]
+    """
+    from collections import deque
+    n_states, n_actions = next_states.shape
+    # Build reverse adjacency
+    rev: list[list[int]] = [[] for _ in range(n_states)]
+    for s in range(n_states):
+        for a in range(n_actions):
+            s_next = int(next_states[s, a])
+            if s_next != s:
+                rev[s_next].append(s)
+
+    dist = np.full(n_states, np.inf)
+    dist[goal_idx] = 0
+    queue = deque([goal_idx])
+    while queue:
+        s = queue.popleft()
+        for s_prev in rev[s]:
+            if dist[s_prev] == np.inf:
+                dist[s_prev] = dist[s] + 1
+                queue.append(s_prev)
+
+    return np.where(np.isfinite(dist), np.power(gamma, dist), 0.0)
+
+
 def simulate_overcooked_random(I_decoded: list, human_mask: int,
                                 rng: "np.random.Generator") -> int:
     """

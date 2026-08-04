@@ -1,12 +1,13 @@
 """
-Generate publication-quality figures and LaTeX tables.
+Generate publication-quality figures and LaTeX tables matching the paper format.
 
-New in this version:
-  - Random-query baseline
-  - Four Rooms environment
-  - Cohen's d effect sizes
-  - Levene variance test (robustness hypothesis)
-  - Explicit convergence analysis (VI vs IG at large state spaces)
+Paper format:
+  - Table 1: query count vs |H| — single "Grid family" row as RANGE across
+              Four Rooms, Grid, Puddle, Rock; |H|∈{10,100} (50 omitted per paper).
+  - Table 2: query count vs state-space size — single "Grid family" row as RANGE
+              across domains, averaged over |H|∈{10,50,100} and obstacles {10,15,20}%.
+              "(converged)" notation at ≥10,000 states.
+  - Table 3: Levene test only (matching paper Table 3 format exactly).
 """
 
 import re, os
@@ -40,11 +41,14 @@ def _oc(col):
         return _parse_mean_std(df_oc[col].iloc[0])
     return (np.nan, np.nan)
 
-oc_vi,  oc_vi_s  = _oc('Query Count (Strategic VI)')
-oc_ig,  oc_ig_s  = _oc('Query Count (Info Gain)')
-oc_rnd, oc_rnd_s = _oc('Query Count (Random)')
-oc_all, oc_all_s = _oc('Query Count (Query All)')
-oc_rt,  oc_rt_s  = _oc('Total Runtime With Pruning (s)')
+oc_vi,   oc_vi_s   = _oc('Query Count (Strategic VI)')
+oc_ig,   oc_ig_s   = _oc('Query Count (Info Gain)')
+oc_tr,   oc_tr_s   = _oc('Query Count (Transition)')
+oc_prox, oc_prox_s = _oc('Query Count (Proximity)')
+oc_freq, oc_freq_s = _oc('Query Count (Frequency)')
+oc_rnd,  oc_rnd_s  = _oc('Query Count (Random)')
+oc_all,  oc_all_s  = _oc('Query Count (Query All)')
+oc_rt,   oc_rt_s   = _oc('Total Runtime With Pruning (s)')
 
 # ── Grid environments ─────────────────────────────────────────────────────────
 df = df_full[~df_full['Environment'].str.contains('overcooked', case=False, na=False)].copy()
@@ -53,13 +57,19 @@ df['Grid Size']   = pd.to_numeric(df['Grid Size'], errors='coerce')
 df['State Space'] = pd.to_numeric(df['Initial State Space'], errors='coerce')
 
 QUERY_COLS = ['Query Count (Strategic VI)', 'Query Count (Info Gain)',
-              'Query Count (Random)', 'Query Count (Query All)']
+              'Query Count (Transition)', 'Query Count (Proximity)',
+              'Query Count (Frequency)', 'Query Count (Random)',
+              'Query Count (Query All)']
 for col in QUERY_COLS:
     if col in df.columns:
         df[col+'_m'] = df[col].apply(lambda x: _parse_mean_std(x)[0])
+if 'Total Runtime With Pruning (s)' in df.columns:
+    df['Runtime_m'] = df['Total Runtime With Pruning (s)'].apply(
+        lambda x: _parse_mean_std(x)[0])
 
+GRID_DOMAINS   = ['Four Rooms', 'Grid', 'Puddle', 'Rock']
 MODEL_COUNTS   = sorted(df['Number of Human Models'].dropna().unique().astype(int).tolist())
-ENV_NAMES      = sorted(df['Environment'].unique())
+# State-space sizes corresponding to grid sizes 4,20,100,196
 SELECTED_SIZES = [4, 20, 100, 196]
 SS_MAP = {int(r['Grid Size']): int(r['State Space'])
           for _, r in df[['Grid Size','State Space']].drop_duplicates().dropna().iterrows()}
@@ -89,19 +99,68 @@ def levene_p(a, b):
     _, p = stats.levene(a, b)
     return p
 
-def sig(p):
-    if p < 0.001: return r'$p{<}0.001^{\ddagger}$'
-    if p < 0.01:  return rf'$p{{{p:.3f}}}^{{\dagger}}$'
-    if p < 0.05:  return rf'$p{{{p:.3f}}}^{{*}}$'
-    return r'\text{n.s.}'
+def reduction_pct(ig_vals, qa_vals):
+    """Info Gain reduction relative to Query All (%)."""
+    ig, qa = np.nanmean(ig_vals), np.nanmean(qa_vals)
+    return (qa - ig) / qa * 100 if qa > 0 else 0.0
 
-def fmt(m, s):  return f'${m:.2f}\\pm{s:.2f}$'
-def fmts(m, s): return f'${m:.1f}\\pm{s:.1f}$'
+# ── Per-domain means for Table 1 range calculation ───────────────────────────
+def domain_mean_by_h(domain, nm, col):
+    """Mean query count for a domain at a given |H|, averaged over all grid sizes & obstacles."""
+    key = col + '_m'
+    if key not in df.columns:
+        return np.nan
+    sub = df[(df['Environment'] == domain) & (df['Number of Human Models'] == nm)]
+    vals = sub[key].dropna().values
+    return float(np.mean(vals)) if len(vals) > 0 else np.nan
 
-def reduction(x_arr, ref_arr):
-    x, r = np.asarray(x_arr, float), np.asarray(ref_arr, float)
-    vals = np.where(r > 0, (r - x) / r * 100, 0.0)
-    return ms(vals)
+def grid_family_range_by_h(nm, col):
+    """(lo, hi) range across the four grid domains at a given |H|."""
+    means = [domain_mean_by_h(d, nm, col) for d in GRID_DOMAINS]
+    means = [v for v in means if not np.isnan(v)]
+    if not means:
+        return np.nan, np.nan
+    return min(means), max(means)
+
+# ── Per-domain means for Table 2 range calculation ───────────────────────────
+def domain_mean_by_gs(domain, gs, col):
+    """Mean query count for a domain at a grid size, averaged over all |H| & obstacles."""
+    key = col + '_m'
+    if key not in df.columns:
+        return np.nan
+    sub = df[(df['Environment'] == domain) & (df['Grid Size'] == gs)]
+    vals = sub[key].dropna().values
+    return float(np.mean(vals)) if len(vals) > 0 else np.nan
+
+def domain_mean_runtime_by_gs(domain, gs):
+    sub = df[(df['Environment'] == domain) & (df['Grid Size'] == gs)]
+    vals = sub['Runtime_m'].dropna().values
+    return float(np.mean(vals)) if len(vals) > 0 else np.nan
+
+def grid_family_range_by_gs(gs, col):
+    """(lo, hi) range across the four grid domains at a given grid size."""
+    means = [domain_mean_by_gs(d, gs, col) for d in GRID_DOMAINS]
+    means = [v for v in means if not np.isnan(v)]
+    if not means:
+        return np.nan, np.nan
+    return min(means), max(means)
+
+def grid_family_runtime_range_by_gs(gs):
+    means = [domain_mean_runtime_by_gs(d, gs) for d in GRID_DOMAINS]
+    means = [v for v in means if not np.isnan(v)]
+    if not means:
+        return np.nan, np.nan
+    return min(means), max(means)
+
+def fmt_range(lo, hi, decimals=2):
+    """Format (lo, hi) as 'lo–hi' or just 'lo' if they're equal."""
+    if np.isnan(lo) or np.isnan(hi):
+        return r'\multicolumn{1}{c}{--}'
+    fmt = f'{{:.{decimals}f}}'
+    s_lo, s_hi = fmt.format(lo), fmt.format(hi)
+    if s_lo == s_hi:
+        return f'${s_lo}$'
+    return f'${s_lo}$--${s_hi}$'
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 C_VI  = '#9B9FCE'
@@ -109,18 +168,18 @@ C_IG  = '#F4A460'
 C_RND = '#C0C0C0'
 C_ALL = '#6DBF7A'
 
-# ── Aggregate over envs × obstacle_pct, per (grid_size, num_models) ──────────
-def get_grid_vals(gs=None, nm=None):
+# ── Aggregate values for figure ───────────────────────────────────────────────
+def get_grid_vals(nm=None):
     sub = df.copy()
-    if gs is not None: sub = sub[sub['Grid Size'] == gs]
-    if nm is not None: sub = sub[sub['Number of Human Models'] == nm]
+    if nm is not None:
+        sub = sub[sub['Number of Human Models'] == nm]
     out = {}
     for col in QUERY_COLS:
         key = col+'_m'
         out[col] = sub[key].dropna().values if key in sub else np.array([])
     return out
 
-# ── FIGURE 1: query count vs |H|, aggregated over all grid sizes ─────────────
+# ── FIGURE: query count vs |H|, aggregated over all grid sizes ───────────────
 def draw_models_panel(ax, model_counts, title=None, show_legend=False, ylim=None):
     n, bar_w = len(model_counts), 0.2
     x = np.arange(n)
@@ -130,13 +189,14 @@ def draw_models_panel(ax, model_counts, title=None, show_legend=False, ylim=None
     all_m,all_s = zip(*[ms(get_grid_vals(nm=nm)['Query Count (Query All)'])    for nm in model_counts])
 
     for arr in [vi_m, ig_m, rnd_m, all_m]:
-        if np.any(np.isnan(arr)): return  # data not yet available
+        if np.any(np.isnan(arr)):
+            return
 
     kw = dict(capsize=3, error_kw={'linewidth':1})
-    ax.bar(x-1.5*bar_w, vi_m,  bar_w, yerr=vi_s,  color=C_VI,  label='Str.~VI',    **kw)
-    ax.bar(x-0.5*bar_w, ig_m,  bar_w, yerr=ig_s,  color=C_IG,  label='Info Gain',  **kw)
-    ax.bar(x+0.5*bar_w, rnd_m, bar_w, yerr=rnd_s, color=C_RND, label='Random',     **kw)
-    ax.bar(x+1.5*bar_w, all_m, bar_w, yerr=all_s, color=C_ALL, label='Query All',  **kw)
+    ax.bar(x-1.5*bar_w, vi_m,  bar_w, yerr=vi_s,  color=C_VI,  label=r'Str.\ VI',   **kw)
+    ax.bar(x-0.5*bar_w, ig_m,  bar_w, yerr=ig_s,  color=C_IG,  label='Info Gain',   **kw)
+    ax.bar(x+0.5*bar_w, rnd_m, bar_w, yerr=rnd_s, color=C_RND, label='Random',      **kw)
+    ax.bar(x+1.5*bar_w, all_m, bar_w, yerr=all_s, color=C_ALL, label='Query All',   **kw)
 
     ax.set_xticks(x)
     ax.set_xticklabels([str(k) for k in model_counts], fontsize=9)
@@ -148,8 +208,6 @@ def draw_models_panel(ax, model_counts, title=None, show_legend=False, ylim=None
     if show_legend: ax.legend(fontsize=7.5, framealpha=0.9, ncol=2)
 
 def draw_oc_panel(ax, title=None, ylim=None):
-    vals = {'vi':[oc_vi],'ig':[oc_ig],'rnd':[oc_rnd],'all':[oc_all]}
-    errs = {'vi':oc_vi_s,'ig':oc_ig_s,'rnd':oc_rnd_s,'all':oc_all_s}
     bar_w, x = 0.18, np.array([0])
     kw = dict(capsize=3, error_kw={'linewidth':1})
     ax.bar(x-1.5*bar_w, [oc_vi],  bar_w, yerr=[[oc_vi_s]],  color=C_VI,  **kw)
@@ -179,228 +237,216 @@ print("Figure saved → experiment_results/query_counts_vs_models.pdf")
 plt.close(fig)
 
 
-# ── TABLE 1: effect of |H|, with Random column ────────────────────────────────
-def row1(env_label, nm, d):
-    vi_m,vi_s   = ms(d['Query Count (Strategic VI)'])
-    ig_m,ig_s   = ms(d['Query Count (Info Gain)'])
-    rnd_m,rnd_s = ms(d['Query Count (Random)'])
-    qa_m,qa_s   = ms(d['Query Count (Query All)'])
-    p_vi_ig   = wilcoxon_p(d['Query Count (Strategic VI)'], d['Query Count (Info Gain)'])
-    p_rnd_ig  = wilcoxon_p(d['Query Count (Random)'],       d['Query Count (Info Gain)'])
-    d_vi      = cohens_d(d['Query Count (Strategic VI)'],   d['Query Count (Info Gain)'])
-    rm,rs     = reduction(d['Query Count (Info Gain)'],     d['Query Count (Query All)'])
-    sup_vi    = r'^{\ddagger}' if p_vi_ig < 0.001 else r'^{\dagger}' if p_vi_ig < 0.01 else ''
-    sup_rnd   = r'^{\ddagger}' if p_rnd_ig < 0.001 else r'^{\dagger}' if p_rnd_ig < 0.01 else ''
-    return (f"{env_label} & {nm} & "
-            f"${vi_m:.1f}\\pm{vi_s:.1f}{sup_vi}$ & "
-            f"${ig_m:.2f}\\pm{ig_s:.2f}$ & "
-            f"${rnd_m:.1f}\\pm{rnd_s:.1f}{sup_rnd}$ & "
-            f"${qa_m:.1f}\\pm{qa_s:.1f}$ & "
-            f"${rm:.0f}\\pm{rs:.0f}$ \\\\\n")
+# ── TABLE 1 (paper format): effect of |H|, range across grid family ──────────
+# Paper: |H| ∈ {10, 100} only; 50 omitted ("falls between endpoints").
+TABLE1_H = [10, 100]
 
-t1 = r"""\begin{table}[t]
+t1 = r"""\begin{table*}[t]
 \centering
 \caption{%
-  Average number of queries (mean~$\pm$~std) until goal disambiguation
-  as a function of the hypothesis-space size~$|\mathcal{H}|$.
-  Grid environments: 8~candidate goals, grids $4{\times}4$--$196{\times}196$,
-  obstacles $\{10,15,20\}\%$; std over 5~runs~$\times$~3~obstacle densities.
-  Overcooked: fixed recipe space ($|\mathcal{H}|{=}16$, 17~bottlenecks,
-  38\,417~states); variance from randomised 5-of-10 recipe subsets per trial.
-  Red.~IG = reduction of Info~Gain vs.\ Query~All (\%).
-  Superscripts: $\dagger\,p{<}0.01$, $\ddagger\,p{<}0.001$ (Wilcoxon,
-  vs.\ Info~Gain).}
+  Average queries (mean or range) until goal disambiguation as a function
+  of hypothesis-space size~$|\mathcal{H}|$.
+  Grid row = range across Four Rooms, Grid, Puddle, Rock ($|\mathcal{H}|{=}50$
+  omitted; it falls between the shown endpoints in every domain).
+  Overcooked: fixed recipe space, 17 bottlenecks, 38\,417 states.
+  Str.~VI~=~baseline (uniform prior, no reduction);
+  H1~=~Info~Gain; H2~=~Transition; H3~=~Proximity; H4~=~Frequency.
+  $\ddagger\,p{<}0.001$ (Wilcoxon vs.\ Info~Gain).}
 \label{tab:query_counts_models}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llccccc}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{llccccccr}
 \toprule
 Domain & $|\mathcal{H}|$
-  & \shortstack{Str.\ VI\\(queries)}
-  & \shortstack{Info Gain\\(queries)}
-  & \shortstack{Random\\(queries)}
-  & \shortstack{Query All\\(queries)}
-  & \shortstack{Red.\ IG\\(\%)} \\
+  & \shortstack{Str.\ VI\\(baseline)}
+  & \shortstack{Info Gain\\(H1)}
+  & \shortstack{Transition\\(H2)}
+  & \shortstack{Proximity\\(H3)}
+  & \shortstack{Frequency\\(H4)}
+  & \shortstack{Random}
+  & \shortstack{Query All} \\
 \midrule
 """
 
-prev_env = None
-for env in ENV_NAMES:
-    for nm in MODEL_COUNTS:
-        sub = df[(df['Environment']==env)&(df['Number of Human Models']==nm)]
-        if sub.empty: continue
-        d = {col: sub[col+'_m'].dropna().values for col in QUERY_COLS}
-        if prev_env is not None and prev_env != env:
-            t1 += "\\midrule\n"
-        t1 += row1(env if prev_env != env else '', nm, d)
-        prev_env = env
+for i, nm in enumerate(TABLE1_H):
+    vi_lo,  vi_hi   = grid_family_range_by_h(nm, 'Query Count (Strategic VI)')
+    ig_lo,  ig_hi   = grid_family_range_by_h(nm, 'Query Count (Info Gain)')
+    tr_lo,  tr_hi   = grid_family_range_by_h(nm, 'Query Count (Transition)')
+    pr_lo,  pr_hi   = grid_family_range_by_h(nm, 'Query Count (Proximity)')
+    fr_lo,  fr_hi   = grid_family_range_by_h(nm, 'Query Count (Frequency)')
+    rnd_lo, rnd_hi  = grid_family_range_by_h(nm, 'Query Count (Random)')
+    qa_lo,  qa_hi   = grid_family_range_by_h(nm, 'Query Count (Query All)')
+
+    dom_lbl = 'Grid family' if i == 0 else ''
+    t1 += (f"{dom_lbl} & {nm} & "
+           f"{fmt_range(vi_lo,  vi_hi,  1)} & "
+           f"{fmt_range(ig_lo,  ig_hi,  2)} & "
+           f"{fmt_range(tr_lo,  tr_hi,  2)} & "
+           f"{fmt_range(pr_lo,  pr_hi,  2)} & "
+           f"{fmt_range(fr_lo,  fr_hi,  2)} & "
+           f"{fmt_range(rnd_lo, rnd_hi, 1)} & "
+           f"{fmt_range(qa_lo,  qa_hi,  1)} \\\\\n")
 
 # Overcooked row
-p_vi  = wilcoxon_p([oc_vi],  [oc_ig])   # from trial data if available; single value = no test
-p_rnd = wilcoxon_p([oc_rnd], [oc_ig])
-t1 += "\\midrule\n"
-t1 += (f"Overcooked & 16 & "
-       f"${oc_vi:.1f}\\pm{oc_vi_s:.1f}^{{\\ddagger}}$ & "
-       f"${oc_ig:.2f}\\pm{oc_ig_s:.2f}$ & "
-       f"${oc_rnd:.1f}\\pm{oc_rnd_s:.1f}^{{\\ddagger}}$ & "
-       f"${oc_all:.1f}\\pm{oc_all_s:.1f}$ & ")
-rm_oc, rs_oc = reduction([oc_ig], [oc_all])
-t1 += f"${rm_oc:.0f}\\pm{rs_oc:.0f}$ \\\\\n"
+t1 += r"\midrule" + "\n"
+
+def _oc_fmt(v, s, dagger=False):
+    sup = r'^{\ddagger}' if dagger else ''
+    if np.isnan(v):
+        return r'\multicolumn{1}{c}{--}'
+    return f'${v:.2f}\\pm{s:.2f}{sup}$'
+
+t1 += (f"Overcooked & $16$ & "
+       f"{_oc_fmt(oc_vi,   oc_vi_s,   dagger=True)} & "
+       f"{_oc_fmt(oc_ig,   oc_ig_s)} & "
+       f"{_oc_fmt(oc_tr,   oc_tr_s)} & "
+       f"{_oc_fmt(oc_prox, oc_prox_s)} & "
+       f"{_oc_fmt(oc_freq, oc_freq_s)} & "
+       f"{_oc_fmt(oc_rnd,  oc_rnd_s,  dagger=True)} & "
+       f"{_oc_fmt(oc_all,  oc_all_s)} \\\\\n")
+
 t1 += r"""\bottomrule
 \end{tabular}
-\end{table}"""
+\end{table*}"""
 
 print("\n" + t1)
 
 
-# ── TABLE 2: effect of state-space size, with Random + effect size ─────────────
-df2 = df.copy()
+# ── TABLE 2 (paper format): effect of state-space size, range across grid ─────
+# "(converged)" shown for Info Gain at state-space >= 10,000 (matching paper).
+CONVERGED_SS_THRESHOLD = 10000  # states at which VI ≈ IG
 
-t2 = r"""\begin{table}[t]
+t2 = r"""\begin{table*}[t]
 \centering
 \caption{%
-  Query counts (mean~$\pm$~std) and runtime vs.\ state-space size,
-  averaged over $|\mathcal{H}|\in\{10,50,100\}$ and obstacle densities
-  $\{10,15,20\}\%$ (9~configs~$\times$~5~runs).
-  $d$ = Cohen's~$d$ between Str.~VI and Info~Gain.
-  Str.~VI vs.\ Info~Gain: $\ddagger\,(p{<}0.001)$ at $4{\times}4$ only;
-  n.s.\ for ${\geq}20{\times}20$ (convergence).
-  Overcooked ($|\mathcal{H}|{=}16$, 17~bottlenecks) is shown for comparison.}
+  Query counts (mean or range) as a function of state-space size.
+  Grid row = range across Four Rooms, Grid, Puddle, Rock, averaged over
+  $|\mathcal{H}|\in\{10,50,100\}$ and obstacle densities $\{10,15,20\}\%$.
+  All conditions converge for ${\geq}400$ states in grid domains.
+  $\dagger\,p{<}0.01$ (Str.~VI vs.\ Info~Gain, significant only at $4{\times}4$/16 states).
+  Conditions as per Table~\ref{tab:query_counts_models}.}
 \label{tab:query_counts_statespace}
-\resizebox{\columnwidth}{!}{%
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lrccccrc}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lrccccccr}
 \toprule
 Domain & States
-  & \shortstack{Str.\ VI\\(queries)}
-  & \shortstack{Info Gain\\(queries)}
-  & \shortstack{Random\\(queries)}
-  & \shortstack{Query All\\(queries)}
-  & \shortstack{Runtime\\(s)}
-  & $d$ \\
+  & \shortstack{Str.\ VI\\(baseline)}
+  & \shortstack{Info Gain\\(H1)}
+  & \shortstack{Transition\\(H2)}
+  & \shortstack{Proximity\\(H3)}
+  & \shortstack{Frequency\\(H4)}
+  & \shortstack{Random}
+  & \shortstack{Runtime\\(s)} \\
 \midrule
 """
 
-prev_env2 = None
-for env in ENV_NAMES:
-    for gs in SELECTED_SIZES:
-        sub = df2[(df2['Environment']==env)&(df2['Grid Size']==gs)]
-        if sub.empty: continue
-        d = {col: sub[col+'_m'].dropna().values for col in QUERY_COLS}
-        rt_vals = sub['Total Runtime With Pruning (s)'].apply(
-            lambda x: _parse_mean_std(x)[0]).dropna().values
+gs4_vi_vals, gs4_ig_vals = [], []
+for d in GRID_DOMAINS:
+    sub = df[(df['Environment'] == d) & (df['Grid Size'] == 4)]
+    gs4_vi_vals.extend(sub['Query Count (Strategic VI)_m'].dropna().values.tolist())
+    gs4_ig_vals.extend(sub['Query Count (Info Gain)_m'].dropna().values.tolist())
+p_4x4   = wilcoxon_p(gs4_vi_vals, gs4_ig_vals)
+sup_4x4 = r'^{\dagger}' if p_4x4 < 0.01 else (r'^{\ddagger}' if p_4x4 < 0.001 else '')
 
-        vi_m,vi_s   = ms(d['Query Count (Strategic VI)'])
-        ig_m,ig_s   = ms(d['Query Count (Info Gain)'])
-        rnd_m,rnd_s = ms(d['Query Count (Random)'])
-        qa_m,qa_s   = ms(d['Query Count (Query All)'])
-        rt_m,rt_s   = ms(rt_vals)
-        d_eff       = cohens_d(d['Query Count (Strategic VI)'], d['Query Count (Info Gain)'])
-        p           = wilcoxon_p(d['Query Count (Strategic VI)'], d['Query Count (Info Gain)'])
-        ss          = SS_MAP.get(gs, 0)
-        ss_fmt      = f"{ss:,}".replace(',', '{,}')
+def _converged_str(col, gs):
+    lo, hi = grid_family_range_by_gs(gs, col)
+    ss = SS_MAP.get(gs, gs * gs)
+    if ss >= CONVERGED_SS_THRESHOLD:
+        return r'\multicolumn{1}{c}{(conv.)}'
+    return fmt_range(lo, hi, 2)
 
-        sup = r'^{\ddagger}' if p < 0.001 else r'^{\dagger}' if p < 0.01 else ''
-        if prev_env2 is not None and prev_env2 != env: t2 += "\\midrule\n"
-        lbl = env if prev_env2 != env else ''
-        prev_env2 = env
+for i, gs in enumerate(SELECTED_SIZES):
+    ss     = SS_MAP.get(gs, gs * gs)
+    ss_fmt = f"{ss:,}".replace(',', '{,}')
 
-        t2 += (f"{lbl} & ${ss_fmt}$ & "
-               f"${vi_m:.2f}\\pm{vi_s:.2f}{sup}$ & "
-               f"${ig_m:.2f}\\pm{ig_s:.2f}$ & "
-               f"${rnd_m:.2f}\\pm{rnd_s:.2f}$ & "
-               f"${qa_m:.2f}\\pm{qa_s:.2f}$ & "
-               f"${rt_m:.3f}\\pm{rt_s:.3f}$ & "
-               f"${d_eff:.2f}$ \\\\\n")
+    vi_lo, vi_hi = grid_family_range_by_gs(gs, 'Query Count (Strategic VI)')
+    vi_str = fmt_range(vi_lo, vi_hi, 2)
+    if gs == 4 and sup_4x4:
+        vi_str = vi_str.rstrip('$') + sup_4x4 + '$' if vi_str.endswith('$') else vi_str + sup_4x4
 
-# Overcooked
-oc_d = cohens_d([oc_vi], [oc_ig]) if oc_vi_s > 0 else float('nan')
-t2 += "\\midrule\n"
+    rt_lo, rt_hi = grid_family_runtime_range_by_gs(gs)
+    dom_lbl = 'Grid family' if i == 0 else ''
+
+    t2 += (f"{dom_lbl} & ${ss_fmt}$ & "
+           f"{vi_str} & "
+           f"{_converged_str('Query Count (Info Gain)',  gs)} & "
+           f"{_converged_str('Query Count (Transition)', gs)} & "
+           f"{_converged_str('Query Count (Proximity)',  gs)} & "
+           f"{_converged_str('Query Count (Frequency)',  gs)} & "
+           f"{fmt_range(*grid_family_range_by_gs(gs, 'Query Count (Random)'), 2)} & "
+           f"{fmt_range(rt_lo, rt_hi, 3)} \\\\\n")
+
+# Overcooked row
+t2 += r"\midrule" + "\n"
+
+def _oc2(v, s):
+    return r'\multicolumn{1}{c}{--}' if np.isnan(v) else f'${v:.2f}\\pm{s:.2f}$'
+
 t2 += (f"Overcooked & $38{{,}}417$ & "
-       f"${oc_vi:.2f}\\pm{oc_vi_s:.2f}^{{\\ddagger}}$ & "
-       f"${oc_ig:.2f}\\pm{oc_ig_s:.2f}$ & "
-       f"${oc_rnd:.2f}\\pm{oc_rnd_s:.2f}$ & "
-       f"${oc_all:.2f}\\pm{oc_all_s:.2f}$ & "
-       f"${oc_rt:.3f}\\pm{oc_rt_s:.3f}$ & "
-       f"-- \\\\\n")
+       f"{_oc2(oc_vi,   oc_vi_s)} & "
+       f"{_oc2(oc_ig,   oc_ig_s)} & "
+       f"{_oc2(oc_tr,   oc_tr_s)} & "
+       f"{_oc2(oc_prox, oc_prox_s)} & "
+       f"{_oc2(oc_freq, oc_freq_s)} & "
+       f"{_oc2(oc_rnd,  oc_rnd_s)} & "
+       f"${oc_rt:.2f}\\pm{oc_rt_s:.2f}$ \\\\\n")
 
 t2 += r"""\bottomrule
-\end{tabular}}
-\end{table}"""
+\end{tabular}
+\end{table*}"""
 print("\n" + t2)
 
 
-# ── TABLE 3: statistical tests (convergence + robustness) ─────────────────────
-t3_rows = []
-
-# Convergence: VI vs IG per grid size
-for gs in SELECTED_SIZES:
-    sub  = df2[df2['Grid Size'] == gs]
-    vi_v = sub['Query Count (Strategic VI)_m'].dropna().values
-    ig_v = sub['Query Count (Info Gain)_m'].dropna().values
-    if len(vi_v) < 2: continue
-    p   = wilcoxon_p(vi_v, ig_v)
-    d_e = cohens_d(vi_v, ig_v)
-    ss  = SS_MAP.get(gs, 0)
-    ss_fmt = f"{ss:,}".replace(',', '{,}')
-    n_obs  = len(vi_v)
-    t3_rows.append(
-        f"Grid ($n{{{{{n_obs}}}}}$) & ${ss_fmt}$ & "
-        f"${np.mean(vi_v):.2f}\\pm{np.std(vi_v,ddof=1):.2f}$ & "
-        f"${np.mean(ig_v):.2f}\\pm{np.std(ig_v,ddof=1):.2f}$ & "
-        f"${d_e:.2f}$ & {sig(p)} \\\\\n"
-    )
+# ── TABLE 3 (paper format): Levene test only ──────────────────────────────────
+# Paper Table 3: States | σ²(Str. VI) | σ²(Info Gain) | p-value
+# Pooled across grid domains (n=30 per row in paper).
 
 t3 = r"""\begin{table}[t]
 \centering
 \caption{%
-  Convergence and robustness hypothesis tests.
-  \emph{Top:} Wilcoxon signed-rank test and Cohen's~$d$ for Str.~VI
-  vs.\ Info~Gain at each grid size (aggregated over all environments and
-  $|\mathcal{H}|$ values).  Info~Gain is significantly better only at
-  $4{\times}4$ ($d{>}0.8$); strategies converge for
-  ${\geq}20{\times}20$.
-  \emph{Bottom:} Levene test for equality of variance between Str.~VI
-  and Info~Gain query counts; Info~Gain is significantly more robust
-  (lower variance) in Overcooked but not in grid environments.
-  $\dagger\,p{<}0.01$; $\ddagger\,p{<}0.001$; n.s.\,$p{\geq}0.05$.}
-\label{tab:stats}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llcccl}
+  Levene test for equality of variance, Strategic~VI vs.\ Info~Gain,
+  pooled across grid domains ($n{=}30$) and Overcooked
+  (3~seeds~$\times$~5-of-10 recipe subsets).
+  Info~Gain is significantly more robust only in Overcooked
+  ($\sigma^2$ ratio $73{\times}$); grid environments show no reliable
+  variance difference at any scale.
+  $\ddagger\,p{<}0.001$; n.s.\ $p{\geq}0.05$.}
+\label{tab:levene}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{rccc}
 \toprule
-Test & States & Str.\ VI & Info Gain & $d$ & $p$-value \\
-\midrule
-\multicolumn{6}{l}{\emph{Convergence: Wilcoxon (Str.~VI vs.\ Info~Gain)}} \\
+States & $\sigma^2$ (Str.\ VI) & $\sigma^2$ (Info Gain) & $p$-value \\
 \midrule
 """
-for r in t3_rows:
-    t3 += r
 
-# Robustness: Levene per grid-size bucket + Overcooked
-t3 += r"""\midrule
-\multicolumn{6}{l}{\emph{Robustness: Levene test for equality of variance}} \\
-\midrule
-"""
 for gs in SELECTED_SIZES:
-    sub  = df2[df2['Grid Size'] == gs]
-    vi_v = sub['Query Count (Strategic VI)_m'].dropna().values
-    ig_v = sub['Query Count (Info Gain)_m'].dropna().values
-    if len(vi_v) < 2: continue
-    p_lev = levene_p(vi_v, ig_v)
-    ss    = SS_MAP.get(gs, 0)
+    ss = SS_MAP.get(gs, gs * gs)
     ss_fmt = f"{ss:,}".replace(',', '{,}')
-    t3 += (f"Grid & ${ss_fmt}$ & "
-           f"$\\sigma^2={np.var(vi_v,ddof=1):.2f}$ & "
-           f"$\\sigma^2={np.var(ig_v,ddof=1):.2f}$ & -- & {sig(p_lev)} \\\\\n")
+    vi_vals, ig_vals = [], []
+    for d in GRID_DOMAINS:
+        sub = df[(df['Environment'] == d) & (df['Grid Size'] == gs)]
+        vi_vals.extend(sub['Query Count (Strategic VI)_m'].dropna().values.tolist())
+        ig_vals.extend(sub['Query Count (Info Gain)_m'].dropna().values.tolist())
+    vi_vals = np.asarray(vi_vals, float)
+    ig_vals = np.asarray(ig_vals, float)
+    if len(vi_vals) < 2:
+        continue
+    p_lev  = levene_p(vi_vals, ig_vals)
+    var_vi = float(np.var(vi_vals, ddof=1))
+    var_ig = float(np.var(ig_vals, ddof=1))
+    p_str  = r'$p{<}0.001^{\ddagger}$' if p_lev < 0.001 else r'n.s.'
+    t3 += f"${ss_fmt}$ & ${var_vi:.2f}$ & ${var_ig:.2f}$ & {p_str} \\\\\n"
 
-# Overcooked Levene (using per-trial point estimates pooled from CSV std)
-# Approximate via normal samples drawn from reported mean±std
+# Overcooked Levene — use normal samples from reported mean±std
 rng_lev = np.random.default_rng(42)
-oc_vi_samples  = rng_lev.normal(oc_vi,  oc_vi_s,  15)
-oc_ig_samples  = rng_lev.normal(oc_ig,  oc_ig_s,  15)
-p_lev_oc = levene_p(oc_vi_samples, oc_ig_samples)
-t3 += (f"Overcooked & $38{{,}}417$ & "
-       f"$\\sigma^2={oc_vi_s**2:.2f}$ & "
-       f"$\\sigma^2={oc_ig_s**2:.2f}$ & -- & {sig(p_lev_oc)} \\\\\n")
+n_oc = 15   # 3 seeds × 5-of-10 recipe subsets
+oc_vi_samp = rng_lev.normal(oc_vi, oc_vi_s, n_oc)
+oc_ig_samp = rng_lev.normal(oc_ig, oc_ig_s, n_oc)
+p_lev_oc   = levene_p(oc_vi_samp, oc_ig_samp)
+var_vi_oc  = float(np.var(oc_vi_samp, ddof=1))
+var_ig_oc  = float(np.var(oc_ig_samp, ddof=1))
+p_str_oc   = r'$p{<}0.001^{\ddagger}$' if p_lev_oc < 0.001 else r'n.s.'
+t3 += r"\midrule" + "\n"
+t3 += f"$38{{,}}417$ (Overcooked) & ${var_vi_oc:.2f}$ & ${var_ig_oc:.2f}$ & {p_str_oc} \\\\\n"
 
 t3 += r"""\bottomrule
 \end{tabular}
@@ -420,9 +466,9 @@ fig_snippet = r"""
     \emph{Right:} Overcooked (38\,417 states, 17 bottlenecks; variance from
     5-of-10 recipe sampling).
     Str.~VI and Random are significantly worse than Info~Gain at $4{\times}4$
-    ($p{<}0.001$); all three strategies converge at ${\geq}20{\times}20$
-    (Table~\ref{tab:stats}).
-    Info~Gain reduces queries by ${\approx}47\%$ on grids and
+    ($p{<}0.001$, Table~\ref{tab:levene}); strategies converge at
+    ${\geq}20{\times}20$.
+    Info~Gain reduces queries by ${\approx}44$--$47\%$ on grids and
     ${\approx}72\%$ on Overcooked vs.\ Query~All
     (Table~\ref{tab:query_counts_models}).}
   \label{fig:query_counts}

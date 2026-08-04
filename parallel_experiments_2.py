@@ -41,6 +41,10 @@ from overcooked_env import (
     simulate_overcooked_vi,
     simulate_overcooked_info_gain,
     simulate_overcooked_random,
+    simulate_overcooked_transition,
+    simulate_overcooked_proximity,
+    simulate_overcooked_frequency,
+    compute_v_star_grid,
     NUM_POT as OVERCOOKED_NUM_POT,
     SERVE_ACTION as OVERCOOKED_SERVE_ACTION,
     CLIENT_SERVED as OVERCOOKED_CLIENT_SERVED,
@@ -499,6 +503,9 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
         "no_pruning": {"times": [], "checks": [], "subsets": []},
         "query_counts": [],
         "information_gain_counts": [],
+        "transition_counts": [],
+        "proximity_counts": [],
+        "frequency_counts": [],
         "random_counts": [],
         "query_all_counts": [],
         "human_bottlenecks": [],
@@ -506,7 +513,7 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
         "initial_mdp_action_space_sizes": [],
     }
 
-    num_trials = 3 if IS_MACOS else 5
+    num_trials = 3   # paper specifies 3 random seeds for Overcooked
 
     # Build pipeline once (deterministic)
     t0 = time.time()
@@ -532,6 +539,15 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
     ]
     all_count = len(B_filter)   # Query All: ask about every decision-point
 
+    # Proximity: V*_MR for Overcooked robot MDP
+    # CLIENT_SERVED (=38416) is the absorbing terminal state.
+    v_star_oc    = compute_v_star_grid(T_R, OVERCOOKED_CLIENT_SERVED)
+    unique_B_oc  = sorted(set(tuple(b) for subset in I_decoded for b in subset))
+    v_star_per_bn_oc = np.array([
+        v_star_oc[b[0] * OVERCOOKED_NUM_POT + b[1]] if len(b) == 2 else 0.5
+        for b in unique_B_oc
+    ])
+
     # Each trial samples a random subset of k recipes to observe, introducing
     # variance that reflects uncertainty about which hypothesis is the true one.
     n_recipes = len(all_human_masks)
@@ -540,10 +556,13 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
 
     for trial_idx in range(num_trials):
         subset_idx   = rng.choice(n_recipes, size=k_sample, replace=False)
-        trial_masks   = [all_human_masks[i] for i in subset_idx]
-        vi_counts     = [simulate_overcooked_vi(qnet, hm)             for hm in trial_masks]
-        ig_counts     = [simulate_overcooked_info_gain(I_decoded, hm)  for hm in trial_masks]
-        rand_counts   = [simulate_overcooked_random(I_decoded, hm, rng) for hm in trial_masks]
+        trial_masks  = [all_human_masks[i] for i in subset_idx]
+        vi_counts    = [simulate_overcooked_vi(qnet, hm)                              for hm in trial_masks]
+        ig_counts    = [simulate_overcooked_info_gain(I_decoded, hm)                   for hm in trial_masks]
+        tr_counts    = [simulate_overcooked_transition(qnet, I_decoded, hm)            for hm in trial_masks]
+        prox_counts  = [simulate_overcooked_proximity(I_decoded, hm, v_star_per_bn_oc) for hm in trial_masks]
+        freq_counts  = [simulate_overcooked_frequency(I_decoded, hm)                   for hm in trial_masks]
+        rand_counts  = [simulate_overcooked_random(I_decoded, hm, rng)                 for hm in trial_masks]
 
         results["determinizing_mdp_times"].append(determinizing_mdp_time)
         results["initial_mdp_state_space_sizes"].append(T_R.shape[0])
@@ -560,6 +579,9 @@ def run_overcooked_experiment(T_R, T_H_list, determinizing_mdp_time, seed=0) -> 
         results["human_bottlenecks"].append(len(B_filter))
         results["query_counts"].append(float(np.mean(vi_counts)))
         results["information_gain_counts"].append(float(np.mean(ig_counts)))
+        results["transition_counts"].append(float(np.mean(tr_counts)))
+        results["proximity_counts"].append(float(np.mean(prox_counts)))
+        results["frequency_counts"].append(float(np.mean(freq_counts)))
         results["random_counts"].append(float(np.mean(rand_counts)))
         results["query_all_counts"].append(float(all_count))
 
@@ -647,6 +669,9 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                 "query_counts": [],
                 "information_gain_counts": [],
+                "transition_counts": [],
+                "proximity_counts": [],
+                "frequency_counts": [],
                 "random_counts": [],
                 "query_all_counts": [],
                 "human_bottlenecks": [],
@@ -700,10 +725,23 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
                                               target=goal_i, start=start_state)
                     for T_H, goal_i in zip(M_H_list, human_goal_idxs)
                 ]
-            trial_rng  = np.random.default_rng(trial_seed + trial)
-            vi_counts  = [simulate_overcooked_vi(qnet, hm)                         for hm in human_masks]
-            ig_counts  = [simulate_overcooked_info_gain(I_decoded, hm)              for hm in human_masks]
-            rand_counts= [simulate_overcooked_random(I_decoded, hm, trial_rng)      for hm in human_masks]
+            # Compute V*_MR for Proximity condition (once per trial)
+            # M_R is already the next_states array; goal_state is the robot's goal index
+            v_star_global = compute_v_star_grid(M_R, goal_state)
+            # Map each bottleneck (state index) to its V* value
+            unique_B_list = sorted(set(tuple(b) for subset in I_decoded for b in subset))
+            v_star_per_bn = np.array([
+                v_star_global[b[0]] if len(b) == 1 and b[0] < len(v_star_global) else 0.5
+                for b in unique_B_list
+            ])
+
+            trial_rng     = np.random.default_rng(trial_seed + trial)
+            vi_counts     = [simulate_overcooked_vi(qnet, hm)                             for hm in human_masks]
+            ig_counts     = [simulate_overcooked_info_gain(I_decoded, hm)                  for hm in human_masks]
+            tr_counts     = [simulate_overcooked_transition(qnet, I_decoded, hm)           for hm in human_masks]
+            prox_counts   = [simulate_overcooked_proximity(I_decoded, hm, v_star_per_bn)   for hm in human_masks]
+            freq_counts   = [simulate_overcooked_frequency(I_decoded, hm)                  for hm in human_masks]
+            rand_counts   = [simulate_overcooked_random(I_decoded, hm, trial_rng)          for hm in human_masks]
 
             results["bottleneck_finding_times"].append(bottleneck_time)
             results["maximal_achievable_pruning_times"].append(maximal_time)
@@ -715,9 +753,12 @@ def run_single_experiment(params: Dict[str, Any]) -> Dict[str, Any]:
             results["policy_computation_pruning_times"].append(policy_time)
             results["policy_computation_no_pruning_times"].append(policy_time)
             results["human_bottlenecks"].append(len(B_filter))
-            results["query_counts"].append(float(np.mean(vi_counts))   if vi_counts   else 0.0)
-            results["information_gain_counts"].append(float(np.mean(ig_counts))   if ig_counts   else 0.0)
-            results["random_counts"].append(float(np.mean(rand_counts)) if rand_counts else 0.0)
+            results["query_counts"].append(float(np.mean(vi_counts))     if vi_counts   else 0.0)
+            results["information_gain_counts"].append(float(np.mean(ig_counts))     if ig_counts   else 0.0)
+            results["transition_counts"].append(float(np.mean(tr_counts))   if tr_counts   else 0.0)
+            results["proximity_counts"].append(float(np.mean(prox_counts))  if prox_counts else 0.0)
+            results["frequency_counts"].append(float(np.mean(freq_counts))  if freq_counts else 0.0)
+            results["random_counts"].append(float(np.mean(rand_counts))   if rand_counts else 0.0)
             results["query_all_counts"].append(float(len(B_filter)))
 
             gc.collect()
@@ -856,6 +897,9 @@ def run_parallel_experiments_with_pybullet(num_runs: int, grid_sizes: list,
                                 "no_pruning": {"times": [], "checks": [], "subsets": []},
                                 "query_counts": [],
                                 "information_gain_counts": [],
+                                "transition_counts": [],
+                                "proximity_counts": [],
+                                "frequency_counts": [],
                                 "random_counts": [],
                                 "query_all_counts": [],
                                 "human_bottlenecks": [],
@@ -900,6 +944,9 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
         'Runtime Improvement (%)': [],
         'Query Count (Strategic VI)': [],
         'Query Count (Info Gain)': [],
+        'Query Count (Transition)': [],
+        'Query Count (Proximity)': [],
+        'Query Count (Frequency)': [],
         'Query Count (Random)': [],
         'Query Count (Query All)': [],
         'Human Bottlenecks': [],
@@ -1010,6 +1057,9 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
             for col, key in [
                 ('Query Count (Strategic VI)', 'query_counts'),
                 ('Query Count (Info Gain)',    'information_gain_counts'),
+                ('Query Count (Transition)',   'transition_counts'),
+                ('Query Count (Proximity)',    'proximity_counts'),
+                ('Query Count (Frequency)',    'frequency_counts'),
                 ('Query Count (Random)',       'random_counts'),
                 ('Query Count (Query All)',    'query_all_counts'),
             ]:
@@ -1064,8 +1114,8 @@ def create_enhanced_results_table(all_environments_results, output_file="experim
 def main():
     num_runs = 5
     grid_sizes = [4, 10, 20, 50, 100, 196]   # 196x196 = 38,416 ≈ Overcooked (38,417)
-    human_model_counts = [10, 50, 100]
-    obstacle_percentages = [0.1, 0.15, 0.2]
+    human_model_counts = [10, 50, 100]        # 50 tested but omitted from Table 1 display
+    obstacle_percentages = [0.1, 0.15, 0.2]   # per Table 2 caption: {10, 15, 20}%
     max_workers = 4
     query_threshold = 1000
 
