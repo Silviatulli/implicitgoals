@@ -1,31 +1,50 @@
 """
 overcooked_env.py
 =================
-No-movement Overcooked game backend, bottleneck extraction (Algorithm 1), and
-the exact Query MDP solver. Trimmed to only what parallel_experiments.py's
-'overcooked' world type uses.
+Game backend: state encodings and transition-matrix builders.
 
-All functions operate on encoded integer state IDs — no decoding, no plotting.
+This module is the only place where the *rules of the game* live — recipes,
+the inventory / pot bit-packing, the kitchen grid, and which states carry a
+serving edge.  It produces transition matrices and nothing else.
 
-Pipeline
---------
-  1. build_transition_matrix_nomove()               → T, RECIPES, {}
-  2. extract_bottlenecks_nomove([T])                 → possible_bottlenecks
-  3. remove_toboggan_redundancies(T, B)               → B_cleaned        [optional]
-  4. find_maximally_achievable_subsets(B_cleaned, T)  → I                [Algorithm 1]
-  5. decode_subsets_to_2d_nomove(I)                   → I_decoded
-  6. solve_query_mdp_exact(I_decoded)                 → ExactQNet
+Everything computed *from* a transition matrix (bottlenecks B, the filtered set
+B_filter, the maximally achievable subsets I, I_array, the Query MDP) lives in
+the shared, game-agnostic bottlenecks.py at the repo root, which works on the
+matrices alone and has no notion of a recipe.  Decoding and plotting live in
+overcooked_viz.py, DQN training in the shared query_mdp_nn.py.
+
+Configurations
+--------------
+Two MDPs, each with an `allow_drop` variant:
+
+No-movement MDP — abstract state = inv * NUM_POT + pot
+    T_base, RECIPES, _ = build_transition_matrix_nomove(allow_drop)
+    T_R, T_H_list      = serving_matrices_nomove(T_base, RECIPES)
+    start_state = 0
+    goal_state  = CLIENT_SERVED
+
+Movement MDP — state = pos * STATE_STRIDE + facing * FACING_STRIDE
+                     + inv * NUM_POT + pot
+    T_R, RECIPES, grid_info = build_transition_matrix_move(grid_string, allow_drop)
+    T_R, T_H_list, RECIPES, grid_info = serving_matrices_move(grid_string, allow_drop)
+    start_state = grid_info['start_state']
+    goal_state  = grid_info['CLIENT_SERVED_MOVE']
+
+Robot vs. human matrices
+------------------------
+T_R       robot matrix — a serving edge from *every* completed recipe.
+T_H_list  one matrix per candidate human — a serving edge for that human's
+          recipe only.  This is the only place recipes enter the pipeline: from
+          here on, a "human" is just another transition matrix.
+
+Both are handed to bottlenecks.py together with `start_state` and
+`goal_state`; the movement MDP additionally supplies an explicit `I_array`
+(see move_goals) because its terminal states are the post-scoop states rather
+than the direct predecessors of the absorbing state.
 
 Notation
 --------
 T            transition matrix: T[state, action] → next_state  (ints throughout).
-B            bottleneck state IDs — mandatory waypoints on every path to a terminal.
-I            list of maximally achievable bottleneck subsets (Algorithm 1 output);
-             each element is a list of bottleneck state IDs.
-K_I          bitmask of bottlenecks confirmed to belong to the human's target (oracle YES).
-K_not_I      bitmask of bottlenecks confirmed not to belong to it (oracle NO).
-I_hat        = K_I | (unqueried bits) — current upper-bound on the target.
-mdp          ExactQNet returned by solve_query_mdp_exact: V, policy, absorbing masks.
 inv          bit-packed int: inventory state.  Bit layout (8 bits):
              bit 0 = plate flag, bit 1 = cooked flag,
              bits 2-3 = onion count, bits 4-5 = tomato count, bits 6-7 = mushroom count.
@@ -34,12 +53,8 @@ pot          bit-packed int: pot state.  Same bit layout as inv
 """
 
 import numpy as np
-import networkx as nx
 from tqdm import tqdm
 from collections import deque
-import time
-import torch
-import torch.nn as nn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,12 +73,30 @@ ITEM_MAP = [4, 16, 64]   # 0=onion, 1=tomato, 2=mushroom
 SERVE_ACTION  = NUM_ACTIONS         # 5: interact_with_serving_desk
 CLIENT_SERVED = NUM_INV * NUM_POT   # 38416: shared absorbing state (all recipes end here)
 
+# ── Movement-MDP constants ────────────────────────────────────────────────────
+# Facing directions (also used as the move-action indices 0-3)
+DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT = 0, 1, 2, 3
+DIR_DELTA = {DIR_UP: (-1, 0), DIR_DOWN: (1, 0), DIR_LEFT: (0, -1), DIR_RIGHT: (0, 1)}
+NUM_FACING      = 4
+NUM_ACTIONS_MOVE = 5  # 0=up 1=down 2=left 3=right 4=interact
+
+# Default kitchen layout — hardcoded, passed as a default parameter to
+# build_transition_matrix_move() so callers can drop in any other grid string.
+# Legend: W=wall  0/1/2=onion/tomato/mushroom dispenser
+#         B=bowl(plate) pile  P=pot  X=serving counter  A=agent start
+DEFAULT_GRID_STR = """\
+W012BPW
+W     W
+W A   W
+W     W
+WWWXWWW"""
+
 # ── No-movement MDP action indices ────────────────────────────────────────────
 ACTION_PICK_ONION  = 0
 ACTION_PICK_TOMATO = 1
 ACTION_PICK_MUSH   = 2
 ACTION_GRAB_PLATE  = 3
-ACTION_INTERACT    = 4
+ACTION_INTERACT    = 4   # also the interact index in the movement MDP
 PICKUP_ACTIONS     = (ACTION_PICK_ONION, ACTION_PICK_TOMATO, ACTION_PICK_MUSH)
 
 # ── Bit-field accessors for packed inv / pot integers ────────────────────────
@@ -86,7 +119,7 @@ def ingredient_counts(x):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1.  Transition-matrix construction
+# 1.  No-movement MDP
 # ─────────────────────────────────────────────────────────────────────────────
 
 def bfs_reachable_set(T_matrix, start, num_actions):
@@ -120,7 +153,7 @@ def build_transition_matrix_nomove(allow_drop: bool = False, verbose: bool = Tru
     The returned matrix has shape (CLIENT_SERVED + 1, SERVE_ACTION + 1): the
     extra row is the CLIENT_SERVED absorbing state (self-loop on all actions) and
     the extra column is the SERVE_ACTION slot (self-loop everywhere in this base
-    matrix — serving edges are added by the caller).
+    matrix — serving edges are added by serving_matrices_nomove).
 
     When allow_drop=True, T_not_clean gains extra edges (cycles), but the BFS
     filter is still sound: it only promotes states reachable from state 0, so
@@ -198,1065 +231,337 @@ def build_transition_matrix_nomove(allow_drop: bool = False, verbose: bool = Tru
     return T, RECIPES, {}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2.  Graph & bottleneck extraction
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _dominator_bottlenecks(G, start_state, targets):
+def serving_matrices_nomove(T_base, recipes):
     """
-    Walk the immediate-dominator tree backward from each target, collecting
-    every mandatory waypoint between start_state and that target.
-    """
-    idoms = nx.immediate_dominators(G, start_state)
-    result = set()
-    for target in targets:
-        result.add(target)
-        current = target
-        while current != start_state:
-            current = idoms.get(current, start_state)
-            if current != start_state:
-                result.add(current)
-    return result
+    Add serving edges to a no-movement base matrix, one robot + one human each.
 
+    T_R    : SERVE_ACTION leads to CLIENT_SERVED from *any* of the recipe-done
+             states — the robot is happy to deliver whatever soup is ready.
+    T_H[i] : only recipes[i]'s done-state has a serving edge — candidate human i
+             accepts that soup and no other.
 
-def extract_bottlenecks(T, targets, absorbing_state, start_state=0, verbose=True):
-    """Extract mandatory bottleneck states from a single transition matrix.
-
-    Builds a directed graph from T, runs the dominator tree from start_state,
-    and collects every state that lies on every path to any target state.
-
-    Parameters
-    ----------
-    T              : ndarray, shape (n_states, n_actions)
-    targets        : list[int]  terminal states to trace back from
-    absorbing_state: int  universal terminal always included in the result
-    start_state    : int  root of the dominator tree
-    verbose        : bool
+    All matrices are independent copies of T_base (shape unchanged).
 
     Returns
     -------
-    list[int]  sorted bottleneck state IDs, always includes absorbing_state
+    T_R      : ndarray
+    T_H_list : list[ndarray]   one per entry of `recipes`, in the same order
     """
-    G = nx.DiGraph()
-    for state in range(T.shape[0]):
-        for action in range(T.shape[1]):
-            nxt = int(T[state, action])
-            if nxt != state:
-                G.add_edge(state, nxt)
-    bottlenecks = {absorbing_state} | _dominator_bottlenecks(G, start_state, targets)
-    result = sorted(bottlenecks)
+    T_R = T_base.copy()
+    for r in recipes:
+        T_R[r * NUM_POT, SERVE_ACTION] = CLIENT_SERVED
+
+    T_H_list = []
+    for r in recipes:
+        T_h = T_base.copy()
+        T_h[r * NUM_POT, SERVE_ACTION] = CLIENT_SERVED
+        T_H_list.append(T_h)
+
+    return T_R, T_H_list
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1b.  Module-level no-movement matrices (built once at import — silent)
+#
+#  T_R         : robot matrix — SERVE_ACTION transitions to CLIENT_SERVED from
+#                ANY of the 10 recipe-done states.
+#  T_<OTM>     : human matrix for one specific recipe (OTM = onion-tomato-mush
+#                count string, e.g. T_300, T_111, T_003).  Only that recipe's
+#                done-state has a serving edge.
+#
+#  All 11 matrices have shape (CLIENT_SERVED+1, SERVE_ACTION+1).
+#
+#  RECIPES is also exported here for callers that just need the recipe list
+#  without re-running build_transition_matrix_nomove.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_T_BASE, RECIPES, _ = build_transition_matrix_nomove(verbose=False)
+
+T_R, _T_H_LIST = serving_matrices_nomove(_T_BASE, RECIPES)
+
+# recipe_id → no-movement T_H matrix (used by compare_with_query_all)
+T_H_BY_RECIPE: dict = dict(zip(RECIPES, _T_H_LIST))
+
+_T_HUMAN = {f"T_{(_r >> 2) & 3}{(_r >> 4) & 3}{(_r >> 6) & 3}": _T_h
+            for _r, _T_h in zip(RECIPES, _T_H_LIST)}
+
+T_300 = _T_HUMAN["T_300"]
+T_210 = _T_HUMAN["T_210"]
+T_120 = _T_HUMAN["T_120"]
+T_030 = _T_HUMAN["T_030"]
+T_201 = _T_HUMAN["T_201"]
+T_111 = _T_HUMAN["T_111"]
+T_021 = _T_HUMAN["T_021"]
+T_102 = _T_HUMAN["T_102"]
+T_012 = _T_HUMAN["T_012"]
+T_003 = _T_HUMAN["T_003"]
+
+del _T_BASE, _T_HUMAN
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2.  Movement MDP
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_transition_matrix_move(grid_string=DEFAULT_GRID_STR,
+                                  allow_drop: bool = False,
+                                  verbose: bool = True,
+                                  recipes=None):
+    """
+    Build the transition matrix for the movement MDP.
+
+    State encoding
+    --------------
+    A state is a 4-tuple (pos_idx, facing, inv, pot) flattened as:
+        state = pos_idx * (NUM_FACING * NUM_INV * NUM_POT)
+              + facing  * (NUM_INV * NUM_POT)
+              + inv     * NUM_POT
+              + pot
+    where
+      pos_idx : index into the sorted list of walkable floor cells
+      facing  : last movement direction — 0=up 1=down 2=left 3=right
+      inv     : same bit-packed inventory encoding as the no-movement MDP
+      pot     : same bit-packed pot encoding as the no-movement MDP
+
+    Actions
+    -------
+    0=move_up  1=move_down  2=move_left  3=move_right  4=interact
+
+    Movement (actions 0-3)
+        New facing = action.
+        If the cell in front is a walkable floor cell: move there.
+        Otherwise (wall or counter): stay in place but face that direction.
+
+    Interact (action 4)
+        The agent acts on the cell in front (current facing direction):
+          - Ingredient dispenser (0/1/2) : pick up if empty-handed
+                                           (allow_drop) put back if holding that ingredient
+          - Bowl dispenser (B)           : pick up plate if empty-handed
+                                           (allow_drop) put plate back if holding one
+          - Pot (P)                      : drop ingredient / turn stove on / scoop soup
+          - Serving counter (X)          : deliver cooked soup → CLIENT_SERVED_MOVE
+
+    Grid legend
+    -----------
+    W=wall  0/1/2=onion/tomato/mushroom dispenser
+    B=bowl(plate) pile  P=pot  X=serving counter  A=agent start  ' '=walkable floor
+
+    Parameters
+    ----------
+    recipes : list[int] or None
+        Restrict the serving counter to these recipe ids — this is what turns the
+        robot matrix into a candidate-human matrix.  None means "serve anything".
+
+    Returns
+    -------
+    T_move      : ndarray, shape (CLIENT_SERVED_MOVE + 1, NUM_ACTIONS_MOVE), dtype int32
+    RECIPES     : list[int]  same pot+1 encoding as no-movement MDP
+    grid_info   : dict with grid layout, position index, and derived constants:
+                    walkable        list of (row,col) for each pos_idx
+                    pos_to_idx      dict (row,col) → pos_idx
+                    NUM_POS         number of walkable cells
+                    STATE_STRIDE    NUM_FACING * NUM_INV * NUM_POT
+                    FACING_STRIDE   NUM_INV * NUM_POT
+                    CLIENT_SERVED_MOVE  absorbing terminal state index
+                    start_state     encoded initial state (agent at A, facing down)
+                    objects         dict cell_char → (row, col)
+                    grid            dict (row,col) → cell_char
+    """
+    human_recipe_ids = set(recipes) if recipes else set()
+    rows = grid_string.strip().split('\n')
+    grid = {}        # (row, col) → cell char
+    walkable = []    # sorted list of walkable (row, col)
+    agent_start_rc = None
+    objects = {}     # cell_char → (row, col)
+
+    for r, row_str in enumerate(rows):
+        for c, ch in enumerate(row_str):
+            if ch in (' ', 'A'):
+                grid[(r, c)] = ' '
+                walkable.append((r, c))
+                if ch == 'A':
+                    agent_start_rc = (r, c)
+            elif ch == 'W':
+                grid[(r, c)] = 'W'
+            else:  # counter object: 0,1,2,B,P,X
+                grid[(r, c)] = ch
+                objects[ch] = (r, c)
+
+    walkable.sort()
+    pos_to_idx = {pos: idx for idx, pos in enumerate(walkable)}
+    NUM_POS = len(walkable)
+
+    if agent_start_rc is None:
+        raise ValueError("Grid must contain an agent start cell 'A'.")
+
+    FACING_STRIDE       = NUM_INV * NUM_POT
+    STATE_STRIDE        = NUM_FACING * FACING_STRIDE
+    NUM_STATES_MOVE     = NUM_POS * STATE_STRIDE
+    CLIENT_SERVED_MOVE  = NUM_STATES_MOVE
+
+    start_pos_idx  = pos_to_idx[agent_start_rc]
+    start_state    = start_pos_idx * STATE_STRIDE + DIR_DOWN * FACING_STRIDE  # inv=0, pot=0
+
+    T = np.empty((NUM_STATES_MOVE + 1, NUM_ACTIONS_MOVE), dtype=np.int32)
+    for s in range(NUM_STATES_MOVE + 1):
+        T[s] = s
+
+    RECIPES = []
+    item_set = set(ITEM_MAP)
+
+    for state in range(NUM_STATES_MOVE):
+        pos_idx  = state // STATE_STRIDE
+        rem      = state  % STATE_STRIDE
+        facing   = rem    // FACING_STRIDE
+        rem2     = rem    %  FACING_STRIDE
+        inv      = rem2   // NUM_POT
+        pot      = rem2   %  NUM_POT
+
+        r, c = walkable[pos_idx]
+
+        pot_cooked                       = is_cooked(pot)
+        pot_onions, pot_tomato, pot_mush = ingredient_counts(pot)
+        pot_total_items                  = pot_onions + pot_tomato + pot_mush
+        inv_cooked                       = is_cooked(inv)
+
+        for action in range(4):
+            new_facing = action
+            dr, dc = DIR_DELTA[action]
+            nr, nc = r + dr, c + dc
+            front = grid.get((nr, nc), 'W')
+            new_pos_idx = pos_to_idx[(nr, nc)] if front == ' ' else pos_idx
+            T[state, action] = (new_pos_idx * STATE_STRIDE
+                                + new_facing * FACING_STRIDE
+                                + inv * NUM_POT + pot)
+
+        dr, dc  = DIR_DELTA[facing]
+        fr, fc  = r + dr, c + dc
+        front   = grid.get((fr, fc), 'W')
+
+        new_inv, new_pot = inv, pot
+        served = False
+
+        if front in ('0', '1', '2'):
+            item = ITEM_MAP[int(front)]
+            if inv == 0:
+                new_inv = item
+            elif allow_drop and inv == item:
+                new_inv = 0
+
+        elif front == 'B':
+            if inv == 0:
+                new_inv = 1
+            elif allow_drop and inv == 1:
+                new_inv = 0
+
+        elif front == 'P':
+            if (inv in item_set and not inv_cooked
+                    and pot_total_items < 3 and not pot_cooked
+                    and not is_served_or_plated(pot)):
+                new_inv = 0
+                new_pot = pot + inv
+            elif inv == 0 and pot_total_items == 3 and not pot_cooked:
+                new_pot = pot + 2
+            elif (inv == 1 and pot_cooked
+                      and pot_total_items == 3 and not is_served_or_plated(pot)):
+                recipe_id = pot + 1
+                new_inv   = recipe_id
+                new_pot   = 0
+                if recipe_id not in RECIPES and (not human_recipe_ids or recipe_id in human_recipe_ids):
+                    RECIPES.append(recipe_id)
+
+        elif front == 'X':
+            if inv_cooked and (not human_recipe_ids or inv in human_recipe_ids):
+                served = True
+
+        if served:
+            T[state, 4] = CLIENT_SERVED_MOVE
+        else:
+            T[state, 4] = (pos_idx * STATE_STRIDE
+                           + facing * FACING_STRIDE
+                           + new_inv * NUM_POT + new_pot)
+
+    reachable = bfs_reachable_set(T, start_state, NUM_ACTIONS_MOVE)
+    for state in range(NUM_STATES_MOVE):
+        if state not in reachable:
+            T[state] = state
+
     if verbose:
-        print(f"Found {len(result)} bottleneck states via dominator tree.")
-    return result
+        print(f"T_move built — {len(reachable)} reachable states, "
+              f"{NUM_STATES_MOVE - len(reachable)} ghost states locked.")
+        print(f"Cookable recipes ({len(RECIPES)}): {RECIPES}")
+
+    grid_info = {
+        'grid':              grid,
+        'walkable':          walkable,
+        'pos_to_idx':        pos_to_idx,
+        'NUM_POS':           NUM_POS,
+        'NUM_FACING':        NUM_FACING,
+        'STATE_STRIDE':      STATE_STRIDE,
+        'FACING_STRIDE':     FACING_STRIDE,
+        'CLIENT_SERVED_MOVE': CLIENT_SERVED_MOVE,
+        'start_state':       start_state,
+        'agent_start':       agent_start_rc,
+        'objects':           objects,
+        'grid_str':          grid_string,
+        'allow_drop':        allow_drop,
+    }
+    return T, RECIPES, grid_info
 
 
-def _nomove_targets(T):
-    """Terminal states for one no-movement transition matrix (states with a serving edge)."""
-    if T.shape[0] <= NUM_INV * NUM_POT or T.shape[1] <= NUM_ACTIONS:
-        return []
-    return [s for s in range(NUM_INV * NUM_POT)
-            if int(T[s, SERVE_ACTION]) == CLIENT_SERVED]
-
-
-def extract_bottlenecks_nomove(T_list, start_state=0, verbose=True):
-    """Union of bottlenecks over a list of no-movement transition matrices."""
-    all_bottlenecks = set()
-    for T in T_list:
-        targets = _nomove_targets(T)
-        if targets:
-            all_bottlenecks |= set(
-                extract_bottlenecks(T, targets, CLIENT_SERVED, start_state, verbose=False)
-            )
-    result = sorted(all_bottlenecks)
-    if verbose:
-        n = len(T_list)
-        print(f"Found {len(result)} bottleneck states "
-              f"(union over {n} {'matrix' if n == 1 else 'matrices'}).")
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3.  Toboggan filtering  [optional preprocessing before Algorithm 1]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def remove_toboggan_redundancies(T_matrix, B_list):
+def move_goals(recipes, grid_info):
     """
-    Remove linear, non-branching "toboggan" sequences from the bottleneck set.
+    Terminal states of the movement MDP: the post-scoop state of each recipe —
+    agent standing next to the pot, facing it, holding the finished dish.
 
-    From each bottleneck, BFS to its immediate downstream bottleneck neighbours.
-    A node with exactly one downstream bottleneck offers no real choice and is
-    discarded.  Terminal nodes (0 successors) and true decision points (≥2
-    successors) are kept.
-
-    This step compresses 2^|B| to 2^|B_cleaned| before Algorithm 1, which is
-    the key that makes the search tractable on larger bottleneck sets.
+    These are handed to the bottleneck extractor as its explicit `I_array`.
+    They are *not* the direct predecessors of CLIENT_SERVED_MOVE (those would be
+    "standing in front of the serving counter holding a dish"): the walk back up
+    the dominator tree from the post-scoop state stops exactly where the recipe
+    is decided, which is the granularity the rest of the pipeline expects.
 
     Returns
     -------
-    cleaned : list[int]  sorted bottlenecks after toboggan removal
+    list[int]  one state ID per recipe, in the order of `recipes`
     """
-    # CLIENT_SERVED is excluded from toboggan analysis: [1,X] states (which only
-    # have CLIENT_SERVED as their T_R successor) would be wrongly classified as
-    # toboggans otherwise.  It is always kept and appended at the end.
-    has_client_served = CLIENT_SERVED in set(B_list)
-    regular = [b for b in B_list if b != CLIENT_SERVED]
-
-    B_set = set(regular)
-    cleaned = []
-    num_actions = T_matrix.shape[1]
-
-    for b in regular:
-        immediate_next = set()
-        queue = deque([b])
-        visited = {b}
-
-        while queue:
-            state = queue.popleft()
-            for action in range(num_actions):
-                nxt = int(T_matrix[state, action])
-                if nxt not in visited:
-                    visited.add(nxt)
-                    if nxt in B_set:
-                        immediate_next.add(nxt)
-                    else:
-                        queue.append(nxt)
-
-        if len(immediate_next) != 1:   # 0 = terminal, ≥2 = branching point; 1 = toboggan
-            cleaned.append(b)
-
-    if has_client_served:
-        cleaned.append(CLIENT_SERVED)
-
-    return sorted(cleaned)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4.  Algorithm 1 — Include / Exclude DFS  (subset search)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_reachable_states(T_matrix, start_state):
-    """Vectorized BFS using a boolean frontier mask instead of a growing Python set."""
-    num_states = T_matrix.shape[0]
-    reachable = np.zeros(num_states, dtype=bool)
-    reachable[start_state] = True
-    frontier = np.array([start_state])
-
-    while frontier.size > 0:
-        neighbours = np.unique(T_matrix[frontier].ravel())
-        neighbours = neighbours[~reachable[neighbours]]
-        reachable[neighbours] = True
-        frontier = neighbours
-
-    return reachable
-
-
-def _build_adjacency(possible_bottlenecks, T_matrix, start_state=0):
-    """
-    Collapse per-state reachability into a compact bottleneck-to-bottleneck
-    adjacency matrix — the only structure Algorithm 1 needs during its search.
-
-    Returns
-    -------
-    from_start      : bool array, shape (n,)    from_start[j]    = start can reach j
-    from_bottleneck : bool array, shape (n, n)  from_bottleneck[i, j] = i can reach j
-    """
-    masks = np.stack(
-        [get_reachable_states(T_matrix, start_state)] +
-        [get_reachable_states(T_matrix, b) for b in possible_bottlenecks]
-    )
-    idx = np.array(possible_bottlenecks)
-    adj = masks[:, idx]           # shape (n+1, n)
-    return adj[0], adj[1:]        # from_start (n,), from_bottleneck (n, n)
-
-
-def _np_popcount_u64(arr):
-    """Population count for a numpy uint64 array via parallel bit manipulation."""
-    x = arr.copy()
-    x -= (x >> np.uint64(1)) & np.uint64(0x5555555555555555)
-    x  = (x & np.uint64(0x3333333333333333)) + ((x >> np.uint64(2)) & np.uint64(0x3333333333333333))
-    x  = (x + (x >> np.uint64(4))) & np.uint64(0x0f0f0f0f0f0f0f0f)
-    return (x * np.uint64(0x0101010101010101)) >> np.uint64(56)
-
-
-def filter_maximal_subsets(masks):
-    """
-    Maximality filter: discard any mask m that is a strict subset of another mask M
-    (i.e. (m & M) == m and m != M).
-
-    Supports n <= 63 (int64), n == 64 (uint64), n > 64 (pure-Python fallback).
-    For large inputs (e.g. 18 M masks at n=64) uses a batched numpy approach so
-    the per-mask Python loop only runs on the small set of surviving candidates.
-    """
-    if not masks:
-        return []
-
-    max_val = max(masks)
-    if max_val <= np.iinfo(np.int64).max:
-        dtype = np.int64
-    elif max_val < 2 ** 64:
-        dtype = np.uint64
-    else:
-        # n > 64: pure-Python fallback (arbitrary-precision ints)
-        masks_sorted = sorted(masks, key=lambda m: bin(m).count("1"), reverse=True)
-        kept = []
-        for m in masks_sorted:
-            if not any((m & k) == m for k in kept):
-                kept.append(m)
-        return kept
-
-    arr = np.array(list(masks), dtype=dtype)
-
-    # Sort by popcount descending so we process supersets before subsets
-    arr_u64 = arr.view(np.uint64)
-    pc = _np_popcount_u64(arr_u64).astype(np.intp)
-    arr = arr[np.argsort(-pc, kind='stable')]
-
-    # Batched filter: vectorized subsumption check against kept, then sequential
-    # within the few surviving candidates per batch.
-    BATCH = 100_000
-    kept_list = []
-
-    for b_start in range(0, len(arr), BATCH):
-        batch = arr[b_start:b_start + BATCH]
-
-        if kept_list:
-            kept_np = np.array(kept_list, dtype=dtype)
-            B, K = len(batch), len(kept_np)
-            # subsumed[i] = any j: (batch[i] & kept[j]) == batch[i]
-            subsumed = np.any(
-                (batch.reshape(B, 1) & kept_np.reshape(1, K)) == batch.reshape(B, 1),
-                axis=1,
-            )
-            candidates = batch[~subsumed]
-        else:
-            candidates = batch
-
-        # Sequential pass on the (few) surviving candidates to handle intra-batch subsumption
-        for m in candidates:
-            m_int = int(m)
-            if not any((m_int & k) == m_int for k in kept_list):
-                kept_list.append(m_int)
-
-    return kept_list
-
-
-def check_sequential_achievability(mask, from_start, from_bottleneck, n, memo):
-    """
-    Paper's CheckAchievability test — does some visiting order for the subset
-    encoded by `mask` exist?
-
-    Works recursively: a subset {b1…bk} is achievable iff removing any one
-    element bi leaves an achievable subset AND bi is reachable from whatever
-    was visited last in that sub-order.
-
-    Memoized on `mask` so each subset is solved at most once, regardless of
-    how many DFS branches query it (the paper's "caching" step).
-    memo[mask] stores a bitmask of valid "last-visited" bottlenecks,
-    or -1 as a sentinel for the empty set (achievable vacuously).
-
-    Uses Python int arithmetic for bitmasks so n > 63 bottlenecks are safe.
-    """
-    if mask in memo:
-        return memo[mask] != 0
-
-    if mask == 0:
-        memo[0] = -1    # empty set: achievable, no "last visited" node
-        return True
-
-    ends = 0
-    for b in (i for i in range(n) if (mask >> i) & 1):
-        prev_mask = mask & ~(1 << b)
-        if not check_sequential_achievability(prev_mask, from_start, from_bottleneck, n, memo):
-            continue
-        prev_ends = memo[prev_mask]
-        if prev_ends == -1:                         # prev subset was empty: b must reach from start
-            if from_start[b]:
-                ends |= 1 << b
-        else:
-            prev_ends_bool = np.array([(prev_ends >> i) & 1 for i in range(n)], dtype=bool)
-            if np.any(prev_ends_bool & from_bottleneck[:, b]):
-                ends |= 1 << b
-
-    memo[mask] = ends
-    return ends != 0
-
-
-def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state=0):
-    """
-    Algorithm 1 — find all maximally achievable subsets of bottlenecks.
-
-    Parameters
-    ----------
-    possible_bottlenecks : list[int]   bottleneck state IDs
-    T_R : ndarray                      clean transition matrix
-
-    Returns
-    -------
-    I : list[list[int]]   maximally achievable subsets (each is a list of state IDs)
-    """
-    n = len(possible_bottlenecks)
-
-    print(f"Building bottleneck adjacency for {n} bottlenecks...")
-    from_start, from_bottleneck = _build_adjacency(possible_bottlenecks, T_R, start_state)
-    memo             = {}
-    achievable_masks = []
-    _counter         = [0]
-
-    def generate_subsets(index, current_mask):
-        _counter[0] += 1
-        if _counter[0] % 20_000 == 0:
-            print(f"  {_counter[0]:7d} calls, depth {index}/{n}", end='\r', flush=True)
-        if index == n:
-            achievable_masks.append(current_mask)
-            return
-        generate_subsets(index + 1, current_mask)
-        new_mask = current_mask | (1 << index)
-        if check_sequential_achievability(new_mask, from_start, from_bottleneck, n, memo):
-            generate_subsets(index + 1, new_mask)
-
-    print(f"Running Algorithm 1 (include/exclude DFS, {n} bottlenecks, "
-          f"2^{n} = {1 << n} max subsets)...")
-    generate_subsets(0, 0)
-    print(f"{len(achievable_masks)} achievable subsets at leaves "
-          f"({len(memo)} subsets solved by CheckAchievability).")
-
-    maximal_masks = filter_maximal_subsets(achievable_masks)
-    I = [[possible_bottlenecks[i] for i in range(n) if (m >> i) & 1] for m in maximal_masks]
-
-    # Universal-bottleneck invariant: if CLIENT_SERVED is in the bottleneck set it
-    # must appear in every maximal achievable subset (any trajectory that can win
-    # must pass through it).
-    if CLIENT_SERVED in set(possible_bottlenecks):
-        assert all(CLIENT_SERVED in subset for subset in I), (
-            "Universal-bottleneck invariant violated: CLIENT_SERVED is absent from "
-            "at least one maximal achievable subset.  Every trajectory through a "
-            "matrix with serving edges must end at CLIENT_SERVED."
-        )
-
-    return I
-
-
-def decode_subsets_to_2d_nomove(I):
-    """
-    Decode raw no-movement state IDs (s = inv * NUM_POT + pot) back into
-    [inv_id, pot_id] pairs, the format solve_query_mdp_exact expects.
-    """
-    return [[[s // NUM_POT, s % NUM_POT] for s in subset] for subset in I]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5.  Query MDP solver  (Definition 6)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ExactQNet(nn.Module):
-    """Exact Query MDP policy with the same callable interface as QNet.
-
-    Not a neural network — backed by precomputed backward-induction arrays.
-    Built by solve_query_mdp_exact(); do not instantiate directly.
-    forward(x) takes a (batch, 2n) observation tensor and returns (batch, n) Q-values:
-    0.0 for every tied-optimal action, −1e9 for all others.
-    """
-
-    def __init__(self, n, best_action_mask, POW3, V, failure, success,
-                 unique_B, B_to_idx, p_I, target_masks=None):
-        super().__init__()
-        self.n                = n
-        self.best_action_mask = best_action_mask
-        self.POW3             = POW3
-        self.V                = V
-        self.failure          = failure
-        self.success          = success
-        self.unique_B         = unique_B
-        self.B_to_idx         = B_to_idx
-        self.p_I              = p_I
-        self.target_masks     = target_masks if target_masks is not None else []
-
-    def forward(self, x):
-        """(batch, 2n) float tensor → (batch, n) Q-value tensor."""
-        n    = self.n
-        pow3 = self.POW3            # already int64 (solve_query_mdp_exact) -- no cast needed
-        best = self.best_action_mask  # int32; fancy-indexing with int64 `states` is fine as-is
-        obs    = (x.detach().cpu().numpy() > 0.5).astype(np.int64)  # (batch, 2n)
-        KI     = obs[:, :n]
-        KN     = obs[:, n:]
-        states = (KI + 2 * KN) @ pow3
-        masks  = best[states]
-        bits   = np.arange(n, dtype=np.int64)
-        q_np   = np.where(
-            (masks[:, None] >> bits[None, :]) & 1, 0.0, -1e9
-        ).astype(np.float32)
-        return torch.from_numpy(q_np).to(x.device)
-
-
-def solve_query_mdp_exact(I_decoded, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0, oracle=None):
-    """
-    Solve the Query MDP via vectorized backward induction.
-
-    Encoding: each unique bottleneck gets a bit index.  A knowledge state
-    (K_I, K_not_I) is encoded as a base-3 integer: digit i ∈
-    {0=unqueried, 1=oracle_yes, 2=oracle_no}.  Total state space: 3^n.
-
-    Absorbing states:
-      failure — K_I is not a subset of any target mask (impossible to succeed)
-      success — I_hat = K_I ∪ {all unqueried bits} covers some target entirely
-
-    Backward induction sweeps from q = n−1 down to q = 0 queried bits,
-    since a state with q bits queried only depends on states with q+1 bits.
-    Ties in expected value are stored as bitmasks so the full tied-action set
-    is available for analysis.
-
-    Parameters
-    ----------
-    I_decoded : list of lists of [inv_id, pot_id] (from decode_subsets_to_2d_nomove)
-    C_Q, p_I, gamma : MDP cost/reward/discount parameters
-    p_F : float (default 0.0)
-        Terminal value of failure states.
-    oracle : optional object with a probs_for_raw_ids(raw_ids) method returning
-        per-bottleneck P(YES) floats; defaults to uniform 0.5 for every bottleneck.
-
-    Returns
-    -------
-    ExactQNet with attributes: V, best_action_mask, failure, success,
-                               unique_B, B_to_idx, n, POW3, p_I
-    """
-    unique_B = sorted(set(tuple(b) for subset in I_decoded for b in subset))
-    B_to_idx = {b: i for i, b in enumerate(unique_B)}
-    n        = len(unique_B)
-    FULL_MASK = (1 << n) - 1
-
-    if oracle is not None:
-        raw_ids = np.array([b[0] * NUM_POT + b[1] for b in unique_B], dtype=np.intp)
-        probs   = oracle.probs_for_raw_ids(raw_ids)          # shape (n,), float32
-    else:
-        probs = np.full(n, 0.5, dtype=np.float32)
-
-    target_masks = np.zeros(len(I_decoded), dtype=np.int32)
-    for i, subset in enumerate(I_decoded):
-        mask = 0
-        for b in subset:
-            mask |= 1 << B_to_idx[tuple(b)]
-        target_masks[i] = mask
-
-    N3 = 3 ** n
-    print(f"State space: 3^{n} = {N3:,} states "
-          f"(~{N3 * 13 / 1e9:.2f} GB of working arrays)")
-    t0 = time.time()
-
-    POW3 = (3 ** np.arange(n)).astype(np.int64)
-
-    K_I     = np.zeros(N3, dtype=np.int32)
-    K_not_I = np.zeros(N3, dtype=np.int32)
-    q_count = np.zeros(N3, dtype=np.int8)
-
-    rem = np.arange(N3, dtype=np.int64)
-    for i in range(n):
-        digit    = rem % 3
-        rem    //= 3
-        K_I     |= (digit == 1).astype(np.int32) << i
-        K_not_I |= (digit == 2).astype(np.int32) << i
-        q_count += (digit != 0).astype(np.int8)
-    del rem
-    print(f"States decoded in {time.time() - t0:.1f}s")
-
-    failure = np.ones(N3, dtype=bool)
-    for t in target_masks:
-        failure &= (K_I & t) != K_I   # True only if K_I ⊄ every target
-
-    I_hat   = K_I | (FULL_MASK & ~K_not_I)
-    success = np.zeros(N3, dtype=bool)
-    for t in target_masks:
-        success |= I_hat == t
-    success &= ~failure
-    failure |= (q_count == n) & ~success   # fully queried with no match → failure
-
-    V                = np.zeros(N3, dtype=np.float32)
-    V[success]       = p_I
-    V[failure]       = p_F
-    best_action_mask = np.zeros(N3, dtype=np.int32)
-    non_absorbing    = ~failure & ~success
-    print(f"Absorbing states in {time.time() - t0:.1f}s "
-          f"({failure.sum():,} failures, {success.sum():,} successes)")
-
-    for q in range(n - 1, -1, -1):
-        level = np.nonzero((q_count == q) & non_absorbing)[0]
-        if level.size == 0:
-            continue
-
-        used      = K_I[level] | K_not_I[level]
-        best_val  = np.full(level.size, -np.inf, dtype=np.float32)
-        best_mask = np.zeros(level.size, dtype=np.int32)
-
-        for i in range(n):
-            candidate = ((used >> i) & 1) == 0
-            if not np.any(candidate):
-                continue
-            positions = np.nonzero(candidate)[0]
-            idx       = level[positions]
-            p_b       = probs[i]
-            expected  = C_Q + gamma * (p_b * V[idx + POW3[i]] + (1.0 - p_b) * V[idx + 2 * POW3[i]])
-            better = expected > best_val[positions]
-            equal  = expected == best_val[positions]
-            best_val [positions[better]] = expected[better]
-            best_mask[positions[better]] = 1 << i
-            best_mask[positions[equal ]] |= 1 << i
-
-        V[level]                = best_val
-        best_action_mask[level] = best_mask
-
-    print(f"Backward induction done in {time.time() - t0:.1f}s total")
-
-    return ExactQNet(
-        n=n, best_action_mask=best_action_mask, POW3=POW3,
-        V=V, failure=failure, success=success,
-        unique_B=unique_B, B_to_idx=B_to_idx, p_I=p_I,
-        target_masks=target_masks.tolist(),
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6.  Policy simulation helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_human_bottleneck_mask(
-    T_H: np.ndarray,
-    unique_B: list,
-    target: int = None,
-    start: int = 0,
-) -> int:
-    """
-    Determine which bottlenecks in unique_B the human must pass through.
-
-    Works for two bottleneck formats:
-      - Overcooked: unique_B contains [inv_id, pot_id] pairs
-                    → raw_id = inv_id * NUM_POT + pot_id
-                    → target defaults to CLIENT_SERVED
-      - Grid:       unique_B contains (state_id,) 1-tuples
-                    → raw_id = state_id
-                    → target must be provided (= goal_state index)
-
-    Parameters
-    ----------
-    T_H     : ndarray, human's transition matrix
-    unique_B: list of bottleneck descriptors (see above)
-    target  : absorbing/goal state integer ID (None → Overcooked CLIENT_SERVED)
-    start   : start state index (default 0)
-
-    Returns
-    -------
-    int  bitmask over unique_B (bit i set ↔ human passes through unique_B[i])
-    """
-    if target is None:
-        target = CLIENT_SERVED
-        def to_raw(b): return b[0] * NUM_POT + b[1]
-    else:
-        def to_raw(b): return b[0]
-
-    G = nx.DiGraph()
-    for state in range(T_H.shape[0]):
-        for action in range(T_H.shape[1]):
-            nxt = int(T_H[state, action])
-            if nxt != state:
-                G.add_edge(state, nxt)
-
-    if not G.has_node(target) or not nx.has_path(G, start, target):
-        return 0
-
-    human_bn_raw = _dominator_bottlenecks(G, start, [target])
-    human_bn_raw.add(target)
-
-    mask = 0
-    for i, b in enumerate(unique_B):
-        if to_raw(b) in human_bn_raw:
-            mask |= (1 << i)
-    return mask
-
-
-def simulate_overcooked_vi(qnet: "ExactQNet", human_mask: int) -> int:
-    """
-    Simulate the Strategic VI policy (ExactQNet) against one human model,
-    counting queries until the hypothesis space is uniquely determined.
-
-    Termination criterion: at most one achievable subset remains consistent
-    with the queries answered so far (same criterion as simulate_overcooked_info_gain).
-    The qnet's policy selects WHICH bottleneck to query at each step.
-
-    Parameters
-    ----------
-    qnet        : ExactQNet returned by solve_query_mdp_exact
-    human_mask  : bitmask from get_human_bottleneck_mask
-
-    Returns
-    -------
-    int  number of queries asked before the goal is uniquely determined
-    """
-    n            = qnet.n
-    POW3         = qnet.POW3
-    target_masks = qnet.target_masks
-    FULL_MASK    = (1 << n) - 1
-    K_I          = 0
-    K_not        = 0
-    count        = 0
-
-    for _ in range(n + 1):
-        # Stop when hypothesis space is uniquely determined
-        consistent = [t for t in target_masks
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        state_idx = int(np.dot(
-            np.array([(((K_I >> i) & 1) + 2 * ((K_not >> i) & 1)) for i in range(n)],
-                     dtype=np.int64),
-            POW3
-        ))
-        if qnet.failure[state_idx]:
-            break
-
-        action_bitmask = int(qnet.best_action_mask[state_idx])
-        if action_bitmask == 0:
-            # No policy action — fall back to first unqueried bottleneck
-            used = K_I | K_not
-            unqueried = [i for i in range(n) if not ((used >> i) & 1)]
-            if not unqueried:
+    STATE_STRIDE  = grid_info['STATE_STRIDE']
+    FACING_STRIDE = grid_info['FACING_STRIDE']
+    pot_r, pot_c  = grid_info['objects']['P']
+    scoop_pos_idx, scoop_facing = None, None
+    for (r, c), idx in grid_info['pos_to_idx'].items():
+        for facing, (dr, dc) in DIR_DELTA.items():
+            if (r + dr, c + dc) == (pot_r, pot_c):
+                scoop_pos_idx, scoop_facing = idx, facing
                 break
-            action_idx = unqueried[0]
-        else:
-            action_idx = (action_bitmask & -action_bitmask).bit_length() - 1
-
-        if (human_mask >> action_idx) & 1:
-            K_I   |= (1 << action_idx)
-        else:
-            K_not |= (1 << action_idx)
-        count += 1
-
-    return count
+        if scoop_pos_idx is not None:
+            break
+    return [
+        scoop_pos_idx * STATE_STRIDE + scoop_facing * FACING_STRIDE + recipe * NUM_POT
+        for recipe in recipes
+    ]
 
 
-def simulate_overcooked_info_gain(I_decoded: list, human_mask: int) -> int:
+def serving_matrices_move(grid_string=DEFAULT_GRID_STR, allow_drop: bool = False,
+                          verbose: bool = False):
     """
-    Simulate the greedy maximum-information-gain policy against one human model.
+    Movement-MDP counterpart of serving_matrices_nomove.
 
-    At each step pick the unqueried bottleneck that maximises Shannon entropy
-    reduction (uniform prior over consistent hypotheses).
-
-    Parameters
-    ----------
-    I_decoded  : list of lists of [inv_id, pot_id] (from decode_subsets_to_2d_nomove)
-    human_mask : bitmask from get_human_bottleneck_mask
+    The serving edge cannot be patched in after the fact here (it depends on the
+    agent's position and facing), so each candidate human needs its own full
+    build with `recipes=[r]` — the serving counter then only accepts recipe r.
 
     Returns
     -------
-    int  number of queries asked before termination
+    T_R      : ndarray   robot matrix (serving counter accepts every recipe)
+    T_H_list : list[ndarray]  one per recipe, in the order of RECIPES
+    RECIPES  : list[int]
+    grid_info: dict      from the robot build (identical for every human)
     """
-    unique_B   = sorted(set(tuple(b) for subset in I_decoded for b in subset))
-    n          = len(unique_B)
-    FULL_MASK  = (1 << n) - 1
-
-    target_masks = []
-    for subset in I_decoded:
-        m = 0
-        for b in subset:
-            m |= 1 << unique_B.index(tuple(b))
-        target_masks.append(m)
-
-    K_I   = 0
-    K_not = 0
-    count = 0
-
-    for _ in range(n + 1):
-        used      = K_I | K_not
-        unqueried = FULL_MASK & ~used
-        I_hat     = K_I | unqueried
-
-        # success: I_hat exactly equals one target
-        if any(I_hat == t for t in target_masks):
-            break
-
-        consistent = [t for t in target_masks
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        N = len(consistent)
-
-        best_ig  = -1.0
-        best_bit = -1
-        for i in range(n):
-            if (used >> i) & 1:
-                continue
-            yes_h = [t for t in consistent if (t >> i) & 1]
-            no_h  = [t for t in consistent if not ((t >> i) & 1)]
-            p_yes = len(yes_h) / N
-            p_no  = len(no_h)  / N
-
-            def _h(k):
-                return -np.log2(1.0 / k) if k > 0 else 0.0
-
-            ig = np.log2(N) - (p_yes * _h(len(yes_h)) + p_no * _h(len(no_h)))
-            if ig > best_ig:
-                best_ig  = ig
-                best_bit = i
-
-        if best_bit == -1:
-            break
-
-        if (human_mask >> best_bit) & 1:
-            K_I   |= (1 << best_bit)
-        else:
-            K_not |= (1 << best_bit)
-        count += 1
-
-    return count
-
-
-def _build_target_masks(I_decoded):
-    """Helper: convert I_decoded list of bottleneck-tuples into (unique_B, target_masks, n)."""
-    unique_B     = sorted(set(tuple(b) for subset in I_decoded for b in subset))
-    n            = len(unique_B)
-    idx          = {b: i for i, b in enumerate(unique_B)}
-    target_masks = []
-    for subset in I_decoded:
-        m = 0
-        for b in subset:
-            m |= 1 << idx[tuple(b)]
-        target_masks.append(m)
-    return unique_B, target_masks, n
-
-
-def _build_dominance(target_masks, n):
-    """
-    Build the dominance relation for Hypothesis 2 (Structural Redundancy).
-
-    dominates[b2] = list of b1 such that b1 ⪯ b2, i.e.
-        ∀ϕ ∈ Φ : b1 ∈ ϕ  ⟹  b2 ∈ ϕ
-    Semantics: if b2 ∉ IG (oracle answers No), then b1 ∉ IG too — for free.
-    """
-    dominates: dict[int, list[int]] = {b2: [] for b2 in range(n)}
-    for b1 in range(n):
-        for b2 in range(n):
-            if b1 == b2:
-                continue
-            # b1 ⪯ b2: no target has b1=1 and b2=0
-            if not any(((m >> b1) & 1) and not ((m >> b2) & 1) for m in target_masks):
-                dominates[b2].append(b1)
-    return dominates
-
-
-def _propagate_dominance(K_not: int, dominates: dict, n: int) -> int:
-    """Transitively propagate negative responses via dominance entailments."""
-    changed = True
-    while changed:
-        changed = False
-        for b2 in range(n):
-            if (K_not >> b2) & 1:
-                for b1 in dominates[b2]:
-                    if not ((K_not >> b1) & 1):
-                        K_not |= (1 << b1)
-                        changed = True
-    return K_not
-
-
-def simulate_overcooked_transition(
-        qnet: "ExactQNet",
-        I_decoded: list,
-        human_mask: int) -> int:
-    """
-    Simulate the Transition condition (Hypothesis 2: Structural Redundancy).
-
-    Uses the same Strategic VI policy as the baseline for query *selection*,
-    but propagates the bottleneck-dominance entailment
-        b2 ∉ IG  ⟹  b1 ∉ IG  (whenever  ∀ϕ, b1 ∈ ϕ ⟹ b2 ∈ ϕ)
-    after every negative oracle response, ruling out dominated bottlenecks
-    for *free* (without incrementing the query counter).
-
-    Parameters
-    ----------
-    qnet       : ExactQNet from solve_query_mdp_exact
-    I_decoded  : list of bottleneck-subset lists (for dominance graph)
-    human_mask : bitmask from get_human_bottleneck_mask
-
-    Returns
-    -------
-    int  number of paid queries until unique disambiguation
-    """
-    _, target_masks, n = _build_target_masks(I_decoded)
-    dominates = _build_dominance(target_masks, n)
-
-    POW3         = qnet.POW3
-    qnet_targets = qnet.target_masks
-    K_I          = 0
-    K_not        = 0
-    count        = 0
-
-    for _ in range(n + 1):
-        consistent = [t for t in qnet_targets
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        state_idx = int(np.dot(
-            np.array([(((K_I >> i) & 1) + 2 * ((K_not >> i) & 1)) for i in range(n)],
-                     dtype=np.int64),
-            POW3
-        ))
-        if qnet.failure[state_idx]:
-            break
-
-        action_bitmask = int(qnet.best_action_mask[state_idx])
-        if action_bitmask == 0:
-            used      = K_I | K_not
-            unqueried = [i for i in range(n) if not ((used >> i) & 1)]
-            if not unqueried:
-                break
-            action_idx = unqueried[0]
-        else:
-            action_idx = (action_bitmask & -action_bitmask).bit_length() - 1
-
-        if (human_mask >> action_idx) & 1:
-            K_I   |= (1 << action_idx)
-        else:
-            K_not |= (1 << action_idx)
-            # Propagate dominance entailments — no additional query cost
-            K_not = _propagate_dominance(K_not, dominates, n)
-        count += 1
-
-    return count
-
-
-def simulate_overcooked_proximity(
-        I_decoded: list,
-        human_mask: int,
-        v_star_per_bn: "np.ndarray") -> int:
-    """
-    Simulate the Proximity condition (Hypothesis 3: Goal Proximity).
-
-    Rather than a uniform prior over consistent hypotheses, uses a
-    temperature-τ=1 softmax prior weighted by the size-normalised
-    average of V*_MR over each hypothesis's bottlenecks:
-
-        ψ(ϕ) = (1/|ϕ|) Σ_{b∈ϕ} V*_MR(b)
-        p_τ(ϕ) ∝ exp(ψ(ϕ)/τ),  τ = 1
-
-    Query selection: pick s⋆ = argmax_s  P_τ(s ∈ IG | consistent).
-
-    Parameters
-    ----------
-    I_decoded      : list of bottleneck-subset lists
-    human_mask     : bitmask from get_human_bottleneck_mask
-    v_star_per_bn  : 1-D array of length len(unique_B); v_star_per_bn[i]
-                     = V*_MR evaluated at the i-th bottleneck in sorted(unique_B)
-
-    Returns
-    -------
-    int  number of queries until unique disambiguation
-    """
-    _, target_masks, n = _build_target_masks(I_decoded)
-    FULL_MASK = (1 << n) - 1
-
-    K_I   = 0
-    K_not = 0
-    count = 0
-
-    for _ in range(n + 1):
-        used      = K_I | K_not
-        unqueried = FULL_MASK & ~used
-        I_hat     = K_I | unqueried
-
-        if any(I_hat == t for t in target_masks):
-            break
-
-        consistent = [t for t in target_masks
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        # ψ(ϕ) for each consistent hypothesis
-        psi = np.array([
-            np.mean([v_star_per_bn[i] for i in range(n) if (t >> i) & 1])
-            if any((t >> i) & 1 for i in range(n)) else 0.0
-            for t in consistent
-        ])
-        psi -= psi.max()                       # numerical stability
-        weights = np.exp(psi)
-        weights /= weights.sum()
-
-        # P_τ(s ∈ IG)
-        p_in_ig = np.zeros(n)
-        for wi, t in zip(weights, consistent):
-            for i in range(n):
-                if (t >> i) & 1:
-                    p_in_ig[i] += wi
-
-        best_bit = -1
-        best_p   = -1.0
-        for i in range(n):
-            if not ((used >> i) & 1) and p_in_ig[i] > best_p:
-                best_p   = p_in_ig[i]
-                best_bit = i
-
-        if best_bit == -1:
-            break
-
-        if (human_mask >> best_bit) & 1:
-            K_I   |= (1 << best_bit)
-        else:
-            K_not |= (1 << best_bit)
-        count += 1
-
-    return count
-
-
-def simulate_overcooked_frequency(I_decoded: list, human_mask: int) -> int:
-    """
-    Simulate Hypothesis 4 (Query Frequency / greedy maximum overlap).
-
-    At each step selects  s⋆ = argmax_s |{ϕ ∈ Φ(B, KI) : s ∈ ϕ}|,
-    i.e.\ the unqueried bottleneck appearing in the most consistent
-    hypotheses — equal to argmax_s P(s ∈ IG) under a uniform prior.
-
-    Parameters
-    ----------
-    I_decoded  : list of bottleneck-subset lists
-    human_mask : bitmask from get_human_bottleneck_mask
-
-    Returns
-    -------
-    int  number of queries until unique disambiguation
-    """
-    _, target_masks, n = _build_target_masks(I_decoded)
-    FULL_MASK = (1 << n) - 1
-
-    K_I   = 0
-    K_not = 0
-    count = 0
-
-    for _ in range(n + 1):
-        used      = K_I | K_not
-        unqueried = FULL_MASK & ~used
-        I_hat     = K_I | unqueried
-
-        if any(I_hat == t for t in target_masks):
-            break
-
-        consistent = [t for t in target_masks
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        # Count occurrences of each unqueried bottleneck in consistent hypotheses
-        freq = np.zeros(n, dtype=int)
-        for t in consistent:
-            for i in range(n):
-                if ((t >> i) & 1) and not ((used >> i) & 1):
-                    freq[i] += 1
-
-        best_bit = int(np.argmax(freq))
-        if freq[best_bit] == 0:
-            break
-
-        if (human_mask >> best_bit) & 1:
-            K_I   |= (1 << best_bit)
-        else:
-            K_not |= (1 << best_bit)
-        count += 1
-
-    return count
-
-
-def compute_v_star_grid(next_states: "np.ndarray", goal_idx: int,
-                        gamma: float = 0.99) -> "np.ndarray":
-    """
-    Compute V*_MR for a deterministic grid MDP via reverse BFS from goal_idx.
-
-    V*(s) = γ^d(s) where d(s) = shortest-path distance from s to goal_idx.
-    Unreachable states get V*(s) = 0.
-
-    Parameters
-    ----------
-    next_states : (n_states, n_actions) int array — next_states[s,a] = s'
-    goal_idx    : absorbing goal state index
-    gamma       : discount factor
-
-    Returns
-    -------
-    np.ndarray of shape (n_states,) with V*(s) values in [0, 1]
-    """
-    from collections import deque
-    n_states, n_actions = next_states.shape
-    # Build reverse adjacency
-    rev: list[list[int]] = [[] for _ in range(n_states)]
-    for s in range(n_states):
-        for a in range(n_actions):
-            s_next = int(next_states[s, a])
-            if s_next != s:
-                rev[s_next].append(s)
-
-    dist = np.full(n_states, np.inf)
-    dist[goal_idx] = 0
-    queue = deque([goal_idx])
-    while queue:
-        s = queue.popleft()
-        for s_prev in rev[s]:
-            if dist[s_prev] == np.inf:
-                dist[s_prev] = dist[s] + 1
-                queue.append(s_prev)
-
-    return np.where(np.isfinite(dist), np.power(gamma, dist), 0.0)
-
-
-def simulate_overcooked_random(I_decoded: list, human_mask: int,
-                                rng: "np.random.Generator") -> int:
-    """
-    Simulate a uniformly-random query policy: at each step pick an unqueried
-    bottleneck at random.  Uses the same termination criterion as Info~Gain.
-
-    Parameters
-    ----------
-    I_decoded  : list of lists of bottleneck tuples
-    human_mask : bitmask from get_human_bottleneck_mask
-    rng        : numpy random Generator (for reproducibility)
-
-    Returns
-    -------
-    int  number of queries asked before termination
-    """
-    unique_B = sorted(set(tuple(b) for subset in I_decoded for b in subset))
-    n        = len(unique_B)
-    FULL_MASK = (1 << n) - 1
-
-    target_masks = []
-    for subset in I_decoded:
-        m = 0
-        for b in subset:
-            m |= 1 << unique_B.index(tuple(b))
-        target_masks.append(m)
-
-    K_I   = 0
-    K_not = 0
-    count = 0
-
-    for _ in range(n + 1):
-        used      = K_I | K_not
-        unqueried = FULL_MASK & ~used
-        I_hat     = K_I | unqueried
-
-        if any(I_hat == t for t in target_masks):
-            break
-
-        consistent = [t for t in target_masks
-                      if (K_I & t) == K_I and (K_not & t) == 0]
-        if len(consistent) <= 1:
-            break
-
-        candidates = [i for i in range(n) if not ((used >> i) & 1)]
-        if not candidates:
-            break
-        bit = int(rng.choice(candidates))
-
-        if (human_mask >> bit) & 1:
-            K_I   |= (1 << bit)
-        else:
-            K_not |= (1 << bit)
-        count += 1
-
-    return count
+    T_R, RECIPES, grid_info = build_transition_matrix_move(
+        grid_string, allow_drop, verbose=verbose
+    )
+    T_H_list = [
+        build_transition_matrix_move(grid_string, allow_drop, verbose=False, recipes=[r])[0]
+        for r in RECIPES
+    ]
+    return T_R, T_H_list, RECIPES, grid_info
