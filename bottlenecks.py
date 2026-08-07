@@ -25,15 +25,18 @@ Pipeline
   3.  find_maximally_achievable_subsets(B_filter, T_R, start, goal)
                                                          → I          [Algorithm 1]
   4.  subsets_to_array(I, B_filter)                      → I_array    bool (len_I_array, n)
-  5.  solve_query_mdp_exact(I, B_filter, oracle=oracle)  → ExactQNet  (3^n flat arrays)
+  5.  one policy per condition — solve_query_mdp_exact (VI), _info_gain (H1),
+      _proximity (H3), _frequency (H4); build_dominance (H2) returns a mask, not
+      a policy, because H2 selects nothing                → §7
+  6.  evaluate_policy_on_real_human(...)                 → query count per episode
 
 B_filter is what the robot may ask about, and the bit order every policy and
 I_array agree on.  It is sorted at step 1 and that order is kept to the end of
 the pipeline; it is never derived from I — see _bit_order().
 
-The exact policy is evaluated against a deterministic real-human oracle by
-query_mdp_nn.evaluate_policy_on_real_human, which also provides the random-order
-"query all" baseline.
+Step 6 also provides the random-order "query all" baseline (policy_network=None)
+and applies H2 (dominance=...), which is why the "X" and "X + H2" columns can
+share one policy object.
 
 Notation
 --------
@@ -44,10 +47,17 @@ I            list of maximally achievable bottleneck subsets (Algorithm 1 output
              subset the human actually pursues.
 I_array      bool matrix, shape (len(I), n): row k is subset I[k], columns ordered
              like the bottleneck list it was built against.
-K_I          bitmask of bottlenecks confirmed to belong to the human's subset (oracle YES).
+I_G          the evaluated human's own subgoal set — the bottlenecks it answers YES
+             to, restricted to B_filter.  Unknown to the robot; the queries are
+             what narrow it down.  The Query MDP assumes I_G ∈ I ("the hypothesis
+             space contains the truth"); when it does not, the episode is a
+             failure and Hypothesis 2's entailment stops being valid — see
+             build_dominance.
+K_I          bitmask of bottlenecks confirmed to belong to I_G (oracle YES).
 K_not_I      bitmask of bottlenecks confirmed not to belong to it (oracle NO).
-I_hat        = K_I | (unqueried bits) — current upper-bound on the human's subset.
-mdp          ExactQNet returned by solve_query_mdp_exact: V, policy, absorbing masks.
+I_hat        = K_I | (unqueried bits) — current upper-bound on I_G.
+             The invariant every condition maintains is K_I ⊆ I_G ⊆ I_hat.
+ExactQNet    what solve_query_mdp_exact returns: V, best_action_mask, absorbing masks.
 """
 
 import time
@@ -76,19 +86,6 @@ def get_reachable_states(T, start_state):
         frontier = neighbours
 
     return reachable
-
-
-def goal_predecessors(T, goal_state):
-    """
-    States with at least one action leading into `goal_state` — the default
-    terminal set when the caller does not supply an explicit one.
-
-    `goal_state` itself is excluded: it is absorbing, so its self-loop is not a
-    way of *reaching* the goal.
-    """
-    hits = np.any(np.asarray(T) == goal_state, axis=1)
-    hits[goal_state] = False
-    return np.nonzero(hits)[0].tolist()
 
 
 def _build_adjacency(possible_bottlenecks, T, start_state=0):
@@ -139,30 +136,30 @@ def _transition_graph(T):
     return G
 
 
-def extract_bottlenecks(T, start_state, goal_state, goals=None, verbose=False):
+def extract_bottlenecks(T, start_state, goal_state, verbose=False):
     """Extract the mandatory bottleneck states of a single transition matrix.
 
     Builds a directed graph from T, runs the dominator tree from start_state, and
-    collects every state that lies on every path to any goal state.
+    collects every state that lies on every path to goal_state.
+
+    The walk starts at goal_state itself, so the terminal set is not a parameter:
+    every state it returns dominates the goal.  A model whose interesting
+    terminal states sit *earlier* than the goal (a movement MDP stopping at the
+    post-scoop state, say) needs a second dominator walk, not a keyword — the
+    tree would have to be re-rooted, which is why there is no `goals` argument
+    to pass one in.
 
     Parameters
     ----------
     T           : ndarray, shape (n_states, n_actions)
     start_state : int  root of the dominator tree
     goal_state  : int  universal absorbing state, always included in the result
-    goals       : list[int] or None
-        States to trace back from.  None means "every predecessor of goal_state",
-        which is the right answer whenever reaching the goal is what identifies a
-        trajectory.  Pass an explicit list when the interesting terminal states sit
-        earlier than the goal (e.g. move_goals in Overcooked/overcooked_env.py).
     verbose     : bool
 
     Returns
     -------
     list[int]  sorted bottleneck state IDs, always includes goal_state
     """
-    if goals is None:
-        goals = goal_predecessors(T, goal_state)
     bottlenecks = {goal_state} | _dominator_bottlenecks(
         _transition_graph(T), start_state, goal_state
     )
@@ -173,19 +170,14 @@ def extract_bottlenecks(T, start_state, goal_state, goals=None, verbose=False):
 
 
 def compute_bottlenecks_per_matrix(T_list, start_state, goal_state,
-                                   goals_list=None, verbose=False) -> list:
+                                   verbose=False) -> list:
     """
     One frozenset of raw bottleneck IDs per matrix — the ensemble the Oracle
-    samples from.
-
-    goals_list : None, or one goal-state list per matrix (same order as T_list)
-                 for the case where each matrix has its own terminal states.
+    samples from, and the pool the evaluated human is drawn from.
     """
     return [
-        frozenset(extract_bottlenecks(
-            T, start_state, goal_state, verbose=verbose,
-        ))
-        for i, T in enumerate(T_list)
+        frozenset(extract_bottlenecks(T, start_state, goal_state, verbose=verbose))
+        for T in T_list
     ]
 
 
@@ -215,8 +207,8 @@ def remove_toboggan_redundancies(T_matrix, B_list, goal_state):
 
     Parameters
     ----------
-    start_state : int
-        The starting state for the BFS traversal.
+    T_matrix : ndarray, shape (n_states, n_actions)
+    B_list : list[int]  bottlenecks to filter
     goal_state : int or None
         When given, the goal is held out of the analysis and appended back at the
         end.  This protects the last state of each branch — whose only downstream
@@ -469,14 +461,14 @@ def subsets_to_array(I, B):
 
     Parameters
     ----------
-    I       : list[iterable[int]]  maximally achievable subsets, raw state IDs
-    B : list[int]            bottleneck list defining the column order
-                                   (B_filter, or B when I was expanded back onto it)
+    I : list[iterable[int]]  maximally achievable subsets, raw state IDs
+    B : list[int]            bottleneck list defining the column order — B_filter,
+                             in the order it was sorted into when it was built
 
     Returns
     -------
-    I_array : bool ndarray, shape (len(I), len(columns))
-              I_array[k, j] is True iff columns[j] belongs to subset I[k].
+    I_array : bool ndarray, shape (len(I), len(B))
+              I_array[k, j] is True iff B[j] belongs to subset I[k].
     """
     col_of = bottleneck_index(B)
     I_array = np.zeros((len(I), len(B)), dtype=bool)
@@ -487,7 +479,7 @@ def subsets_to_array(I, B):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7.  Oracle  (non-uniform prior over bottleneck membership)
+# 5.  Oracle  (non-uniform prior over bottleneck membership)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Oracle:
@@ -560,7 +552,7 @@ class Oracle:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.  Query MDP solvers  (Definition 6)
+# 6.  Query MDP solvers  (Definition 6)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ExactQNet(nn.Module):
@@ -743,12 +735,12 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.  Hypothesis conditions — H1, H2, H3, H4
+# 7.  Hypothesis conditions — H1, H2, H3, H4
 #
 # Each condition answers one question: *which bottleneck to query next*.  None
 # of them owns the knowledge state and none of them decides when to stop —
-# QueryMDPVecEnv does that, with the same I_hat ⊆ I_k test solve_query_mdp_exact
-# uses (§7).  So every condition is comparable to the VI baseline by
+# §8 does that, with the same I_hat ⊆ I_k test solve_query_mdp_exact
+# uses (§6).  So every condition is comparable to the VI baseline by
 # construction, and a condition is just a scoring rule over B.
 #
 # The exception is H2, which is not a selection rule at all: it is an
@@ -864,12 +856,22 @@ def _dominance_closure(T):
     """H2(ii): dom[b2, b1] is True iff b1 ⪯ b2, i.e. ∀ϕ ∈ Φ: b1 ∈ ϕ ⇒ b2 ∈ ϕ.
 
     An oracle NO on b2 then entails NO on every such b1 at no query cost.
-    Transitively closed here so the env only needs one propagation step.
+    Transitively closed here so the caller only needs one propagation step.
+
+    A bottleneck occurring in *no* hypothesis is excluded as a b1.  The
+    implication is vacuously true for it against every b2, so it would come out
+    dominated by the whole of B and the first NO anywhere would rule it out —
+    which is a quantifier artifact, not a structural redundancy.  It is also
+    exactly the wrong bit to discard for free: a bottleneck in no ϕ is the one
+    whose YES proves the human matches nothing, so ruling it out unasked turns a
+    failure into a success.  Keeping the row would make H2 change the answer
+    rather than only the number of questions.
     """
     n = T.shape[1]
     # prec[b1, b2] — no hypothesis holds b1 without also holding b2.
     prec = ~((T[:, :, None] & ~T[:, None, :]).any(0))
-    dom  = np.ascontiguousarray(prec.T)          # dom[b2, b1] = b1 ⪯ b2
+    prec &= T.any(0)[:, None]                     # drop the vacuously-true rows
+    dom  = np.ascontiguousarray(prec.T)           # dom[b2, b1] = b1 ⪯ b2
     np.fill_diagonal(dom, False)
     for k in range(n):                            # Warshall — n is small
         dom |= dom[:, k][:, None] & dom[k][None, :]
@@ -951,10 +953,11 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
     """Hypothesis 3 — query bottlenecks in decreasing V_R, the robot's expected
     discounted probability of reaching the goal.
 
-    V_R and state_index are the pair returned by
-    value_iteration_goal_probability(): V_R is indexed by pruned row, and
-    state_index maps a raw state ID to that row.  Time both calls together —
-    the value iteration is part of H3's cost, not a free precomputation.
+    state_index is the second half of what build_stochastic_matrix() returns —
+    it maps a raw state ID to its row in the pruned T_R_sto — and V_R is what
+    value_iteration_goal_probability() returns for that same T_R_sto, so V_R is
+    indexed by pruned row.  Time the builder and the value iteration together
+    with this call: both are part of H3's cost, not a free precomputation.
 
     A bottleneck missing from state_index is unreachable under M_R, so it
     cannot lie on any path to the goal; it scores 0 and is asked last.
@@ -962,9 +965,9 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
     unique_B, B_to_idx = _bit_order(I, B)
     if V_R is None or state_index is None:
         raise ValueError(
-            "solve_query_mdp_proximity needs both V_R and state_index — they are "
-            "the pair returned by value_iteration_goal_probability(T_R_sto, "
-            "start_state, goal_state).")
+            "solve_query_mdp_proximity needs both V_R and state_index: "
+            "T_R_sto, state_index = build_stochastic_matrix(...) and then "
+            "V_R = value_iteration_goal_probability(T_R_sto, state_index[goal]).")
     V_R = np.asarray(V_R, dtype=np.float64)
     if not all(isinstance(b, (int, np.integer)) for b in unique_B):
         raise ValueError("state_index is keyed by raw state ID, so B must be "
@@ -976,7 +979,8 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 
 
 def build_dominance(I, B):
-    """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G.
+    """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G, where
+    I_G is the evaluated human's own subgoal set (see the module Notation).
 
     Deliberately not a solver.  H2 is not a selection rule: it never chooses a
     query, it only widens K_not after an oracle NO, so it is a *layer* that any
@@ -987,8 +991,167 @@ def build_dominance(I, B):
     That separation is what lets one policy serve both the "H1" and "H1 + H2"
     columns — the two runs differ only in whether this mask is passed.
 
+    Soundness.  H2 must only ever change the number of questions, never the
+    answer, and that holds for every human — including one whose subgoal set is
+    in no I_k, which is the case the entailment's ∀ϕ ∈ Φ premise says nothing
+    about.  What buys it is the vacuous-row exclusion in _dominance_closure:
+    measured over 3600 (instance x human x rule) grid trials, the mask changes
+    the answer 0 times and never costs a query, while still saving 2666.
+
     Returns (n, n) bool: dom[b2, b1] is True iff b1 ⪯ b2, i.e. ∀ϕ ∈ Φ,
     b1 ∈ ϕ ⇒ b2 ∈ ϕ.  Transitively closed, so one propagation pass suffices.
     """
     _, B_to_idx = _bit_order(I, B)
     return _dominance_closure(_hypothesis_matrix(I, B_to_idx))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.  Evaluation against a real human
+#
+# One episode = one knowledge state (K_I, K_not) walked forward until it is
+# absorbing.  The policy only ever answers "which bottleneck next"; whether the
+# episode is over is decided here, by the same test solve_query_mdp_exact builds
+# its failure / success masks from (§6).  That is what makes every condition
+# comparable: they share a stopping rule none of them owns.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _terminal(K_I, K_not, I_array):
+    """(done, success) for one knowledge state.
+
+    failure : K_I ⊆ no hypothesis — the human matches nothing in I.
+    success : I_hat ⊆ some hypothesis, with I_hat = K_I ∪ unqueried = ~K_not.
+              Every bottleneck still in play is covered by one achievable
+              subset, so the robot can satisfy the human without asking further.
+
+    K_I, K_not : (n,) bool
+    I_array    : (len(I), n) bool — row k is I[k] in B's bit order.
+    """
+    failure = not (~(K_I & ~I_array).any(1)).any()
+    success = (not failure) and bool((~(~K_not & ~I_array).any(1)).any())
+    return failure or success, success
+
+
+def _grant_entailed_nos(K_I, K_not, dominance):
+    """Hypothesis 2(ii), in place on K_not: the NOs the current K_not entails.
+
+    b1 ⪯ b2 and b2 ∉ I_G ⇒ b1 ∉ I_G, so those bits are ruled out without
+    spending a query.  `dominance` is transitively closed, so one pass reaches
+    the fixpoint.  Bits already answered YES are left alone: overwriting one
+    would forge an answer the oracle never gave.
+
+    No-op when dominance is None, which is every condition except the "+ H2"
+    ones — this is the *only* thing that separates a pair of columns.
+    """
+    if dominance is None:
+        return
+    K_not |= (K_not[:, None] & dominance).any(0) & ~K_I
+
+
+def _run_query_episode(K_I, K_not, I_array, true_bits, choose_action, dominance):
+    """Walk one episode to absorption; returns (n_queries, success).
+
+    The empty knowledge state is tested *before* the loop.  It can already be
+    absorbing: I_hat starts as the whole of B, so if B is contained in some I_k
+    the instance is solved with zero questions.  Entering the loop regardless
+    would bill one query for a problem that never posed a question — and would
+    pick that query from an all-zero best_action_mask, since a policy has no
+    meaningful action at an absorbing state.
+    """
+    done, success = _terminal(K_I, K_not, I_array)
+    if done:
+        return 0, success
+    for n_q in range(1, I_array.shape[1] + 1):
+        action = choose_action(K_I, K_not)
+        if action in true_bits:
+            K_I[action] = True
+        else:
+            K_not[action] = True
+        _grant_entailed_nos(K_I, K_not, dominance)
+        done, success = _terminal(K_I, K_not, I_array)
+        if done:
+            return n_q, success
+    # Unreachable: once every bit is queried I_hat == K_I, so failure and
+    # success partition the state.  Kept so the loop has no silent fall-through.
+    raise RuntimeError("query episode ended without an absorbing state")
+
+
+def evaluate_policy_on_real_human(
+    true_bottlenecks,
+    policy_network,       # ExactQNet / GreedyQNet, or None for the random-order baseline
+    n_runs,
+    I_array,
+    b_to_int,
+    c_q=-10.0,
+    p_i=1.0,
+    p_f=0.0,
+    gamma=0.99,
+    device="cpu",
+    dominance=None,
+):
+    """Evaluate a query policy against a real human with known implicit subgoals.
+
+    The oracle answers deterministically: YES iff the queried bottleneck is in
+    true_bottlenecks.
+
+    `dominance` is Hypothesis 2(ii), from build_dominance().  It is applied here,
+    at inference, and never reaches the policy: the same policy_network run with
+    and without it gives the "X" and "X + H2" columns.
+
+    Parameters
+    ----------
+    true_bottlenecks : bottleneck identifiers the human would answer YES to.
+        Those absent from b_to_int are dropped — they are outside the query set,
+        so the robot can never ask about them.
+    policy_network   : ExactQNet / GreedyQNet → guided policy;
+                       None → "query all", a fresh random order each run.
+    n_runs           : int  independent episodes
+    I_array          : (len(I), n) bool
+    b_to_int         : {bottleneck: column index} — bottleneck_index(B_filter)
+    c_q, p_i, p_f, gamma : MDP parameters, for the reported reward only; the
+        query *count* does not depend on them, since the stopping rule is
+        structural.  They must match the ones the policy was solved with.
+    device           : torch device (ignored when policy_network is None)
+
+    Returns
+    -------
+    dict with 'n_queries' (int), 'total_reward' (float), 'success' (bool),
+    each an array of length n_runs.
+    """
+    n = I_array.shape[1]
+    true_bits = frozenset(
+        b_to_int[_as_label(b)] for b in true_bottlenecks if _as_label(b) in b_to_int
+    )
+
+    if policy_network is None:
+        def choose_action(K_I, K_not):
+            return next(order)
+    else:
+        policy_network.eval()
+        def choose_action(K_I, K_not):
+            obs   = torch.as_tensor(np.concatenate([K_I, K_not])[None, :],
+                                    dtype=torch.float32, device=device)
+            vmask = torch.as_tensor(~(K_I | K_not)[None, :],
+                                    dtype=torch.bool, device=device)
+            with torch.no_grad():
+                q = policy_network(obs).masked_fill(~vmask, -1e9)
+            return int(q.argmax(1).cpu().item())
+
+    n_queries_arr    = np.zeros(n_runs, dtype=int)
+    total_reward_arr = np.zeros(n_runs, dtype=float)
+    success_arr      = np.zeros(n_runs, dtype=bool)
+
+    for run in range(n_runs):
+        K_I, K_not = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+        if policy_network is None:
+            order = iter(shuffle_bottlenecks(list(range(n))))
+        n_q, success = _run_query_episode(K_I, K_not, I_array, true_bits,
+                                          choose_action, dominance)
+        n_queries_arr[run]    = n_q
+        total_reward_arr[run] = n_q * c_q + gamma * (p_i if success else p_f)
+        success_arr[run]      = success
+
+    return {
+        "n_queries":    n_queries_arr,
+        "total_reward": total_reward_arr,
+        "success":      success_arr,
+    }

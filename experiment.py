@@ -1,22 +1,26 @@
 """
-benchmark_creation.py
-=====================
+experiment.py
+=============
 Cross-game benchmark: run the same bottleneck / Query-MDP pipeline on all five
 games and write the comparison to CSV.
 
-    python benchmark_creation.py --num-simu 200 --sizes 4 5 6 --humans 1 3 5
+    python experiment.py --num-simu 200 --sizes 4 5 6 --humans 1 3 5
 
 Each (game, size, humans) combination is repeated --num-simu times, and every
 repetition rebuilds the instance from scratch — a fresh random map for the four
 grid games — so every number reported is a mean over those repetitions.
 
+Nine conditions per repetition: the four selection rules (VI, H1 Info Gain,
+H3 Goal Proximity, H4 Query Frequency), each run alone and again wearing the H2
+dominance mask, plus the random-order "query all" control.
+
 Writes two files into results/ , one row per combination:
     compute_times.csv   mean wall-clock time of every pipeline stage
-    query_counts.csv    mean query count, Strategic Exact vs Query All
+    query_counts.csv    mean query count, one column per condition
 
 and two plots rendered from those same CSVs:
-    query_counts.png    Strategic Exact vs Query All, mean queries per combination
-    compute_times.png   problem size (|B_filter|) and wall-clock time per combination
+    query_counts.png    one subplot per configuration, nine bars each
+    compute_times.png   n_reachable, |I|, |B_filter| and wall-clock time
 
 All defaults (num_simu, sizes, humans, ...) live in parse_args() below.
 """
@@ -75,8 +79,8 @@ from bottlenecks import (
     solve_query_mdp_frequency,
     build_dominance,
     value_iteration_goal_probability,
+    evaluate_policy_on_real_human,
 )
-from query_mdp_nn import evaluate_policy_on_real_human
 
 
 # Four selection rules, each run twice — once alone, once wearing the H2
@@ -189,8 +193,8 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
     """
     t0 = time.perf_counter()
     with _quiet():
-        T_base, recipes, _ = build_transition_matrix_nomove(allow_drop=allow_drop,
-                                                            verbose=False)
+        T_base, recipes = build_transition_matrix_nomove(allow_drop=allow_drop,
+                                                        verbose=False)
     # Seeded after the build so the recipe draw stays fixed even if
     # build_transition_matrix_nomove ever starts consuming the global RNG.
     if seed is not None:
@@ -285,19 +289,19 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
     #
     # One dominator pass, two products: the per-matrix sets (the ensemble the
     # Oracle is built from, and the pool the evaluated human is drawn from) and
-    # their union B.  Running extract_bottlenecks_union as well would repeat the
-    # identical pass over the identical matrices, so t_bottlenecks carries the
-    # whole cost and t_oracle_sets is only the union that falls out of it.
+    # their union B.  A separate "union" helper would repeat the identical pass
+    # over the identical matrices, so t_bottlenecks carries the whole cost and
+    # t_oracle_sets is only the union that falls out of it.
     t0 = time.perf_counter()
     with _quiet():
         oracle_sets = compute_bottlenecks_per_matrix(T_H_list, start_state, goal_state)
     row["t_bottlenecks"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    # Differs from extract_bottlenecks_union only for a human that cannot reach
-    # the goal at all: that one is skipped there, and contributes {goal_state}
-    # here.  goal_state is a bottleneck of every solvable matrix anyway, so the
-    # union is unchanged unless *every* human is unsolvable.
+    # A human that cannot reach the goal at all still contributes {goal_state}:
+    # extract_bottlenecks always includes it.  goal_state is a bottleneck of
+    # every solvable matrix anyway, so the union is unchanged unless *every*
+    # human is unsolvable.
     B = sorted(set().union(*oracle_sets)) if oracle_sets else []
     row["t_oracle_sets"] = time.perf_counter() - t0
 
@@ -342,11 +346,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
 
     # ── Query MDP ────────────────────────────────────────────────────────────
     n = len(B_filter)
-    if n == 0 or n > max_exact_n:
+    if n == 0:
         for stage in ["t_dominance"] + SOLVE_TIMES + SIM_TIMES:
             row[stage] = float("nan")
-        row["skipped"] = "no bottlenecks" if n == 0 else f"3^{n} too large"
-        tqdm.write(f"skipping Q-MDP exact because n = {n} bottlenecks")
+        row["skipped"] = "no bottlenecks"
         return row, {c: float("nan") for c in CONDITIONS}, float("nan")
 
     # Empirical P(YES | b) = fraction of candidate humans owning b, taken from the
@@ -360,10 +363,28 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
     # needs it, never counted once and amortised: the dominance mask is built
     # once but charged to all four "+ H2" columns, because dropping the other
     # three would not make it any cheaper for the one that remains.
+    #
+    # max_exact_n gates the VI baseline *alone*.  It exists because
+    # solve_query_mdp_exact allocates 3^n knowledge states; the three greedy
+    # rules score B_filter on the fly and cost microseconds at any n, so
+    # skipping them alongside it would hide exactly the regime they are for.
+    # (max_bottlenecks, above, is the other kind of cap: Algorithm 1 produces I,
+    # which every condition needs, so exceeding it skips the repetition whole.)
     policies, base_solve = {}, {}
-    for name, solver in (("strategic_exact", solve_query_mdp_exact),
-                         ("info_gain",       solve_query_mdp_info_gain),
-                         ("frequency",       solve_query_mdp_frequency)):
+    if n > max_exact_n:
+        policies["strategic_exact"]   = None
+        base_solve["strategic_exact"] = float("nan")
+        row["skipped"] = f"VI skipped: 3^{n} too large"
+        tqdm.write(f"skipping the VI baseline because n = {n} bottlenecks "
+                   f"(the greedy rules still run)")
+    else:
+        t0 = time.perf_counter()
+        with _quiet():
+            policies["strategic_exact"] = solve_query_mdp_exact(I, B_filter, oracle=oracle)
+        base_solve["strategic_exact"] = time.perf_counter() - t0
+
+    for name, solver in (("info_gain", solve_query_mdp_info_gain),
+                         ("frequency", solve_query_mdp_frequency)):
         t0 = time.perf_counter()
         with _quiet():
             policies[name] = solver(I, B_filter, oracle=oracle)
@@ -414,11 +435,18 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
             policies.get(base), oracle_bottlenecks, I_array, b_to_int,
             dominance=dominance if name.endswith("_h2") else None)
         row[f"t_sim_{name}"] = time.perf_counter() - t0
-        # Every condition reports the same flag — see the docstring — so keeping
-        # the last one is keeping the instance's flag.
-        success = flag
+        # Read the flag off a condition that does not wear H2.  Every condition
+        # reports the same one — success means the drawn human is representable
+        # in I, a property of the instance, not of the rule (see the docstring),
+        # and build_dominance is built so that H2 changes the query count and
+        # never the answer.  Sourcing it from a plain condition keeps that a
+        # verified property rather than something this line depends on: if H2
+        # ever did change an answer, n_failure would show it instead of hiding
+        # it behind the last condition in CONDITIONS.
+        if not name.endswith("_h2"):
+            success = flag
 
-    row["skipped"] = ""
+    row.setdefault("skipped", "")   # may already hold the VI-skipped note
     return row, counts, success
 
 
@@ -650,7 +678,9 @@ def _aggregate_queries(key, reps, counts_per_rep, successes):
     by_cond = {c: [d.get(c, float("nan")) for d in counts_per_rep] for c in CONDITIONS}
 
     exact_counts = by_cond["strategic_exact"]
-    row["n_episodes"] = int(sum(1 for c in exact_counts if not np.isnan(c)))
+    # Counted on query_all, not on the VI baseline: --max-exact-n can skip VI on
+    # a repetition the greedy rules still completed, and those episodes are real.
+    row["n_episodes"] = int(sum(1 for c in by_cond["query_all"] if not np.isnan(c)))
     row["n_success"] = int(sum(1 for s in successes if not np.isnan(s) and int(s) == 1))
     row["n_failure"] = int(sum(1 for s in successes if not np.isnan(s) and int(s) == 0))
 
@@ -702,11 +732,11 @@ def _make_plots(times_path, queries_path, out_dir):
                         one shared axis because the configurations differ by an
                         order of magnitude in |B_filter|, and a shared y-axis
                         flattens the small ones into indistinguishable stubs.
-    compute_times.png  2x2 grid: state-space size (n_states), hypothesis-space
-                        cardinality (n_I), problem size (|B_filter|), and mean
-                        wall-clock time — so the cost of a combination can be
-                        read against where it started (n_states) and what it
-                        was solving for (n_I).
+    compute_times.png  2x2 grid: the value iteration's matrix side
+                        (n_reachable), hypothesis-space cardinality (n_I),
+                        problem size (|B_filter|), and mean wall-clock time — so
+                        the cost of a combination can be read against where it
+                        started and what it was solving for.
 
     Returns (query_plot_path, times_plot_path).
     """

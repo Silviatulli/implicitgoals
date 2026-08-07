@@ -11,12 +11,13 @@ Two-stage split:
    Algorithm 1, solve) using the game-agnostic `bottlenecks.py`. 
    (Not paralelized because some config demand a lot of ram)
 
-Only solver wired in right now: `solve_query_mdp_exact` ("Strategic VI").
-The other methods from my other branch (DQN, etc.) aren't ported yet —
-copy-pasting them in is next.
+Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI),
+plus H1 Info Gain, H3 Goal Proximity and H4 Query Frequency — each run twice,
+once alone and once wearing the H2 dominance mask. Nine columns with the
+random-order control.
 
-Next step after that: more game variants, to grow `|I|` (the hypothesis
-space) beyond the small/easy sizes we get today.
+Next step: more game variants, to grow `|I|` (the hypothesis space) beyond the
+small/easy sizes we get today.
 
 ## Architecture — how a request flows through the code
 
@@ -42,23 +43,20 @@ space) beyond the small/easy sizes we get today.
 │    Turns bare matrices into a Query MDP and solves it.                │
 │                                                                       │
 │ bottlenecks.py                                                        │
-│   extract_bottlenecks_union       -> B          mandatory waypoints   │
+│   compute_bottlenecks_per_matrix  -> one set per human; union -> B    │
 │   remove_toboggan_redundancies    -> B_filter    real decision nodes  │
 │   find_maximally_achievable_subsets -> I         (Algorithm 1)        │
 │   subsets_to_array                -> I_array                          │
 │   Oracle                          -> simulated human answers          │
-│   solve_query_mdp_exact           -> ExactQNet   Strategic VI solver  │
-│                                                   (the only solver in │
-│                                                    this commit)       │
-│   simulate_exact_trajectories_real -> query counts                    │
-│                                                                       │
-│ query_mdp_nn.py                                                       │
-│   QueryMDPVecEnv, QNet, train()     DQN scaffolding (unused by the    │
-│                                     current experiments -- see TODO)  │
-│   evaluate_policy_on_real_human     shared eval harness               │
+│   solve_query_mdp_exact           -> ExactQNet   VI baseline          │
+│   solve_query_mdp_info_gain       -> GreedyQNet  H1                   │
+│   solve_query_mdp_proximity       -> GreedyQNet  H3 (needs V_R)       │
+│   solve_query_mdp_frequency       -> GreedyQNet  H4                   │
+│   build_dominance                 -> (n,n) mask  H2, not a policy     │
+│   evaluate_policy_on_real_human   -> query counts; owns termination   │
 └───────────────────────────────────────────────────────────────────────┘
                                     |
-                                    | I, I_array, ExactQNet
+                                    | I, I_array, one policy per condition
                                     v
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ 3. EXPERIMENT LAYER                                                        │
@@ -94,14 +92,15 @@ directly.
 
 `bottlenecks.py` takes `T_R`, the candidate `T_H_list`, a start state and a
 goal state, and finds the bottlenecks (`B`), filters them down to real
-decision points (`B_filter`), enumerates the achievable subsets (`I`), and
-solves the Query MDP exactly (`solve_query_mdp_exact`, "Strategic VI") —
-the only solver `experiment.py` uses right now.
+decision points (`B_filter`), enumerates the achievable subsets (`I`), builds
+one policy per selection rule, and evaluates each of them against a
+deterministic human oracle. It is the only file in this layer — one module for
+the whole game-agnostic half of the pipeline.
 
-`query_mdp_nn.py` holds the functions that I had used to approximate the Q-policy with
-a DQN. It's still in the repo because
-`experiment.py` uses one function from it, `evaluate_policy_on_real_human`,
-to evaluate the Strategic Exact policy.
+Termination lives in `evaluate_policy_on_real_human`, never in a policy: a
+condition is only a scoring rule over `B_filter`, and every one of them stops on
+the same `I_hat ⊆ I_k` test `solve_query_mdp_exact` builds its absorbing masks
+from. That is what makes the nine columns comparable.
 
 ### Experiment / results layer
 
@@ -137,3 +136,11 @@ and `results/query_counts.png`.
   The goal is to grow the cardinality of `I` (the maximally achievable
   bottleneck subsets) so the query policies are tested on harder, more
   interesting instances than the current small-`|I|` ones.
+
+- **Stop the grid generator from reseeding the global numpy RNG.** (only modify layer 1)
+
+  `GridWorld.place_random_obstacles` calls `np.random.seed()`, so building a grid
+  resets the process-wide numpy generator — once per robot and per human. The
+  `np.random.seed(seed)` in `generate_determinized_models` is therefore dead, and
+  `experiment.py`'s human draw depends on the last human's obstacle seed instead
+  of the repetition seed. Fix: give `GridWorld` its own `np.random.Generator`.
