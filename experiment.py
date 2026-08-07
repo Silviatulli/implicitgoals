@@ -48,7 +48,10 @@ from overcooked_env import (
     serving_matrices_nomove,
     # encoding constants
     CLIENT_SERVED,
+    # the robot's stochastic model, pruned to the reachable states — Hypothesis 3
+    build_stochastic_matrix as overcooked_stochastic_matrix,
 )
+from gridworld_core import build_stochastic_matrix as grid_stochastic_matrix
 # Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
 # directly instead of a stochastic MDP to determinize: there is no
 # augment_mdp_to_deterministic step, the matrices are already
@@ -63,8 +66,30 @@ from bottlenecks import (
     subsets_to_array,
     compute_bottlenecks_per_matrix,
     solve_query_mdp_exact,
+    # the four hypothesis conditions
+    solve_query_mdp_info_gain,
+    solve_query_mdp_transition,
+    solve_query_mdp_proximity,
+    solve_query_mdp_frequency,
+    value_iteration_goal_probability,
 )
 from query_mdp_nn import evaluate_policy_on_real_human
+
+
+# The six conditions the paper compares.  "strategic_exact" is the value-iteration
+# baseline every hypothesis is measured against; "query_all" is the random-order
+# control.  Order matters: it fixes the CSV column order and the plot legend.
+CONDITIONS = ("strategic_exact", "info_gain", "transition",
+              "proximity", "frequency", "query_all")
+
+CONDITION_LABELS = {
+    "strategic_exact": "VI baseline",
+    "info_gain":       "H1 Information Gain",
+    "transition":      "H2 Structural Redundancy",
+    "proximity":       "H3 Goal Proximity",
+    "frequency":       "H4 Query Frequency",
+    "query_all":       "Random",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +139,10 @@ def build_grid_instance(game, size, num_humans, seed=None, obstacles_percent=0.1
 
     T_R, start_state, goal_state, _ = out["robot"]
     T_H_list = [h[0] for h in out["humans"]]
-    return (T_R, T_H_list, start_state, goal_state), build_time
+    # Deferred, not built here: Hypothesis 3 is timed with its own value
+    # iteration included, so the stochastic model is built inside that timer.
+    sto_builder = lambda: grid_stochastic_matrix(out["robot_mdp"])
+    return (T_R, T_H_list, start_state, goal_state, sto_builder), build_time
 
 
 def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
@@ -153,15 +181,18 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
         T_R, T_H_list = serving_matrices_nomove(T_base, recipes)
     build_time = time.perf_counter() - t0
 
-    return (T_R, T_H_list, 0, CLIENT_SERVED), build_time
+    # See build_grid_instance: deferred so its cost lands inside t_solve_proximity.
+    sto_builder = lambda: overcooked_stochastic_matrix(
+        np.asarray(T_R, dtype=np.int64), 0)
+    return (T_R, T_H_list, 0, CLIENT_SERVED, sto_builder), build_time
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The experiment — one repetition: one instance in, one timing row out
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_instance(T_R, T_H_list, start_state, goal_state, max_exact_n=17,
-                 filter_toboggans=False, max_bottlenecks=18):
+def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
+                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=18):
     """Run the whole pipeline once on one instance and time every stage.
 
     The Query MDP has two distinct inputs, and they are not the same set:
@@ -198,18 +229,23 @@ def run_instance(T_R, T_H_list, start_state, goal_state, max_exact_n=17,
         time.  When False, Algorithm 1 runs on the raw B, `n_B_filter` equals
         `n_B` and `t_toboggan_filter` is NaN to mark the stage as not run.
 
-    Returns (row, exact_count, query_all_count, success): `row` holds the problem
-    sizes and per-stage times, the two counts are the queries the Strategic Exact
-    policy and the Query All baseline needed on one episode, and `success` says
-    whether the episode identified the human at all.  All three are NaN when the
-    Query MDP was skipped — every return path has this same arity, so main() can
-    unpack it unconditionally.
+    sto_builder : callable or None
+        Zero-argument builder returning (T_R_sto, index) — the robot's stochastic
+        model pruned to its reachable states, plus the map from state ID to row.
+        Called *inside* the Proximity timer, because Hypothesis 3's cost includes
+        the value iteration it depends on.  None means H3 is skipped (NaN).
+
+    Returns (row, counts, success): `row` holds the problem sizes and per-stage
+    times, `counts` maps each of CONDITIONS to the queries that condition needed
+    on one episode, and `success` says whether the episode identified the human
+    at all.  Every count is NaN when the Query MDP was skipped — every return
+    path has this same arity, so main() can unpack it unconditionally.
 
     `success` is deliberately a single flag rather than one per policy: an
     episode succeeds iff the drawn human's bottleneck set (restricted to the
     alphabet) is contained in some subset of I, which is a property of the
-    instance and is therefore the same for both policies.  The Strategic Exact
-    episode's own flag is discarded for that reason.
+    instance and is therefore the same for every condition.  The individual
+    episodes' own flags are discarded for that reason.
 
     One call is one repetition — main() averages over num_simu of them.
     """
@@ -258,11 +294,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, max_exact_n=17,
                     "n_I": float("nan"), "n_columns": float("nan")})
         # t_bottlenecks and t_oracle_sets already ran and hold real values —
         # only the stages that never got a chance to run are NaN'd here.
-        for stage in ("t_algorithm1", "t_solve_exact",
-                      "t_sim_exact", "t_sim_query_all"):
+        for stage in ["t_algorithm1"] + SOLVE_TIMES + SIM_TIMES:
             row[stage] = float("nan")
         row["skipped"] = f"{len(B_filter)} bottlenecks > {max_bottlenecks}"
-        return row, float("nan"), float("nan"), float("nan")
+        return row, {c: float("nan") for c in CONDITIONS}, float("nan")
 
     t0 = time.perf_counter()
     with _quiet():
@@ -275,49 +310,77 @@ def run_instance(T_R, T_H_list, start_state, goal_state, max_exact_n=17,
     # handed to solve_query_mdp_exact, so the exact policy's action indices and
     # I_array's columns refer to the same bottleneck; letting the solver infer
     # its own order from I would silently desynchronise the two.
-    columns  = sorted(int(b) for b in B_filter)
-    I_array  = subsets_to_array(I, columns)
-    b_to_int = {b: j for j, b in enumerate(columns)}
+    B_sorted  = sorted(int(b) for b in B_filter)
+    I_array  = subsets_to_array(I, B_sorted)
+    b_to_int = {b: j for j, b in enumerate(B_sorted)}
 
     row.update({"n_B": len(B), "n_B_filter": len(B_filter),
-                "n_I": len(I), "n_columns": len(columns)})
+                "n_I": len(I), "n_columns": len(B_sorted)})
 
     # ── Query MDP ────────────────────────────────────────────────────────────
-    n = len(columns)
+    n = len(B_sorted)
     if n == 0 or n > max_exact_n:
-        row["t_solve_exact"] = float("nan")
-        row["t_sim_exact"] = float("nan")
-        row["t_sim_query_all"] = float("nan")
+        for stage in SOLVE_TIMES + SIM_TIMES:
+            row[stage] = float("nan")
         row["skipped"] = "no bottlenecks" if n == 0 else f"3^{n} too large"
         tqdm.write(f"skipping Q-MDP exact because n = {n} bottlenecks")
-        return row, float("nan"), float("nan"), float("nan")
+        return row, {c: float("nan") for c in CONDITIONS}, float("nan")
 
     # Empirical P(YES | b) = fraction of candidate humans owning b, taken from the
     # very ensemble the evaluated human is drawn from below.  Without it the
     # solver assumes a uniform 50/50 prior over every bottleneck.
     oracle = Oracle(oracle_sets, n_states=max(int(T_R.shape[0]), int(goal_state) + 1))
 
-    t0 = time.perf_counter()
-    with _quiet():
-        exact_policy = solve_query_mdp_exact(I, alphabet=columns, oracle=oracle)
-    row["t_solve_exact"] = time.perf_counter() - t0
+    # ── Build one policy per condition, timing each in isolation ─────────────
+    # Transition solves its own copy of the query MDP rather than reusing the
+    # baseline's: solve_query_mdp_transition attaches `.dominance` to the policy
+    # it is handed, which would silently turn the baseline into H2 as well.
+    policies: dict = {}
+    for name, solver in (("strategic_exact", solve_query_mdp_exact),
+                         ("info_gain",       solve_query_mdp_info_gain),
+                         ("transition",      solve_query_mdp_transition),
+                         ("frequency",       solve_query_mdp_frequency)):
+        t0 = time.perf_counter()
+        with _quiet():
+            policies[name] = solver(I, B_sorted, oracle=oracle)
+        row[f"t_solve_{name}"] = time.perf_counter() - t0
 
-    # The same human faces both policies within a repetition, so the two counts
-    # are paired: their difference is not polluted by which human was drawn.
+    # Proximity: the value iteration is part of H3's cost, so the stochastic
+    # model is built and solved inside this timer rather than hoisted out of it.
+    t0 = time.perf_counter()
+    if sto_builder is None:
+        policies["proximity"] = None
+        row["t_solve_proximity"] = float("nan")
+    else:
+        with _quiet():
+            T_R_sto, sto_index = sto_builder()
+            V_R = value_iteration_goal_probability(T_R_sto, sto_index[int(goal_state)])
+            policies["proximity"] = solve_query_mdp_proximity(
+                I, B_sorted, oracle=oracle, V_R=V_R, state_index=sto_index)
+        row["t_solve_proximity"] = time.perf_counter() - t0
+
+    policies["query_all"] = None   # the random-order control needs no solve
+
+    # The same human faces every condition within a repetition, so the counts are
+    # paired: their differences are not polluted by which human was drawn.
     oracle_bottlenecks = list(oracle_sets[np.random.randint(len(oracle_sets))])
 
-    t0 = time.perf_counter()
-    # The exact episode's own success flag is discarded — see the docstring: it is
-    # always equal to the Query All one, so the two policies share a single flag.
-    exact_count, _ = _query_episode(exact_policy, oracle_bottlenecks, I_array, b_to_int)
-    row["t_sim_exact"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    query_all_count, success = _query_episode(None, oracle_bottlenecks, I_array, b_to_int)
-    row["t_sim_query_all"] = time.perf_counter() - t0
+    counts, success = {}, float("nan")
+    for name in CONDITIONS:
+        if name == "proximity" and policies["proximity"] is None:
+            counts[name] = float("nan")
+            row["t_sim_proximity"] = float("nan")
+            continue
+        t0 = time.perf_counter()
+        counts[name], flag = _query_episode(policies[name], oracle_bottlenecks,
+                                            I_array, b_to_int)
+        row[f"t_sim_{name}"] = time.perf_counter() - t0
+        # Every condition reports the same flag — see the docstring — so keeping
+        # the last one is keeping the instance's flag.
+        success = flag
 
     row["skipped"] = ""
-    return row, exact_count, query_all_count, success
+    return row, counts, success
 
 
 def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int):
@@ -339,9 +402,11 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Every t_* and n_* column is a mean over the num_simu repetitions.
-STAGE_TIMES = ["t_build", "t_bottlenecks", "t_toboggan_filter", "t_algorithm1",
-               "t_oracle_sets", "t_solve_exact", "t_sim_exact",
-               "t_sim_query_all", "t_total"]
+SOLVE_TIMES = [f"t_solve_{c}" for c in CONDITIONS if c != "query_all"]
+SIM_TIMES   = [f"t_sim_{c}"   for c in CONDITIONS]
+
+STAGE_TIMES = (["t_build", "t_bottlenecks", "t_toboggan_filter", "t_algorithm1",
+                "t_oracle_sets"] + SOLVE_TIMES + SIM_TIMES + ["t_total"])
 STAGE_SIZES = ["n_states", "n_actions", "n_humans",
                "n_B", "n_B_filter", "n_I", "n_columns"]
 
@@ -352,13 +417,11 @@ TIME_FIELDS = (["game", "size", "num_humans", "num_simu"] + STAGE_SIZES
 # is not representable in I, in which case its query count measures queries until
 # the contradiction was proved, not queries until the human was identified — the
 # two are not commensurable, hence the split means alongside the pooled ones.
-QUERY_FIELDS = ["game", "size", "num_humans", "num_simu", "n_episodes",
-                "n_success", "n_failure",
-                "strategic_exact_mean", "strategic_exact_std",
-                "strategic_exact_mean_success", "strategic_exact_mean_failure",
-                "query_all_mean", "query_all_std",
-                "query_all_mean_success", "query_all_mean_failure",
-                "saved_queries", "skipped"]
+QUERY_FIELDS = (["game", "size", "num_humans", "num_simu", "n_episodes",
+                 "n_success", "n_failure"]
+                + [f"{c}_{stat}" for c in CONDITIONS
+                   for stat in ("mean", "std", "mean_success", "mean_failure")]
+                + ["saved_queries", "skipped"])
 
 
 def parse_args(argv=None):
@@ -438,7 +501,7 @@ def main(argv=None):
         label = game if size is None else f"{game} {size}x{size}"
         bar.set_postfix_str(f"{label}, {num_humans} humans")
 
-        reps, exact_counts, query_all_counts, successes = [], [], [], []
+        reps, counts_per_rep, successes = [], [], []
         for rep in range(args.num_simu):
             # A distinct seed per repetition — that is what makes the average
             # meaningful for the grid games: each repetition is a new map.
@@ -458,7 +521,7 @@ def main(argv=None):
                     rock_percent=args.rock_percent,
                     divide_rooms=args.divide_rooms)
 
-            row, exact_count, query_all_count, success = run_instance(
+            row, counts, success = run_instance(
                 *instance, max_exact_n=args.max_exact_n,
                 filter_toboggans=(game == "overcooked"),
                 max_bottlenecks=args.max_bottlenecks)
@@ -466,16 +529,14 @@ def main(argv=None):
             row["t_total"] = time.perf_counter() - t_start
 
             reps.append(row)
-            exact_counts.append(exact_count)
-            query_all_counts.append(query_all_count)
+            counts_per_rep.append(counts)
             successes.append(success)
             bar.update(1)
 
         key = {"game": game, "size": "" if size is None else size,
                "num_humans": num_humans, "num_simu": args.num_simu}
         time_rows.append(_aggregate_times(key, reps))
-        query_rows.append(_aggregate_queries(key, reps, exact_counts,
-                                             query_all_counts, successes))
+        query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes))
     bar.close()
 
     times_path   = os.path.join(args.out_dir, "compute_times.csv")
@@ -527,32 +588,35 @@ def _mean_where(values, successes, want):
     return float(np.mean(sel)) if sel else float("nan")
 
 
-def _aggregate_queries(key, reps, exact_counts, query_all_counts, successes):
-    """Average the two policies' query counts over the repetitions.
+def _aggregate_queries(key, reps, counts_per_rep, successes):
+    """Average every condition's query counts over the repetitions.
 
     Reported three ways: pooled over every completed episode, and split by
     whether the episode succeeded.  The split matters because a failed episode's
     query count measures queries-until-contradiction rather than
     queries-until-identification, so pooling the two averages incommensurable
     quantities — and would credit a policy for detecting a contradiction fast.
-    `successes` holds one flag per repetition, shared by both policies.
+    `successes` holds one flag per repetition, shared by every condition.
+
+    `counts_per_rep` is a list of {condition: count} dicts, one per repetition.
     """
     row = dict(key)
-    n_episodes = int(sum(1 for c in exact_counts if not np.isnan(c)))
-    row["n_episodes"] = n_episodes
+    by_cond = {c: [d.get(c, float("nan")) for d in counts_per_rep] for c in CONDITIONS}
+
+    exact_counts = by_cond["strategic_exact"]
+    row["n_episodes"] = int(sum(1 for c in exact_counts if not np.isnan(c)))
     row["n_success"] = int(sum(1 for s in successes if not np.isnan(s) and int(s) == 1))
     row["n_failure"] = int(sum(1 for s in successes if not np.isnan(s) and int(s) == 0))
-    row["strategic_exact_mean"] = _nanmean(exact_counts)
-    row["strategic_exact_std"]  = _nanstd(exact_counts)
-    row["query_all_mean"]       = _nanmean(query_all_counts)
-    row["query_all_std"]        = _nanstd(query_all_counts)
-    row["strategic_exact_mean_success"] = _mean_where(exact_counts, successes, 1)
-    row["strategic_exact_mean_failure"] = _mean_where(exact_counts, successes, 0)
-    row["query_all_mean_success"]       = _mean_where(query_all_counts, successes, 1)
-    row["query_all_mean_failure"]       = _mean_where(query_all_counts, successes, 0)
+
+    for cond, vals in by_cond.items():
+        row[f"{cond}_mean"]         = _nanmean(vals)
+        row[f"{cond}_std"]          = _nanstd(vals)
+        row[f"{cond}_mean_success"] = _mean_where(vals, successes, 1)
+        row[f"{cond}_mean_failure"] = _mean_where(vals, successes, 0)
+
     # Mean of the paired per-repetition differences: queries Strategic Exact
     # saves over Query All against the same human.
-    paired = [q - e for e, q in zip(exact_counts, query_all_counts)
+    paired = [q - e for e, q in zip(exact_counts, by_cond["query_all"])
               if not (np.isnan(e) or np.isnan(q))]
     row["saved_queries"] = float(np.mean(paired)) if paired else float("nan")
     skips = [r["skipped"] for r in reps if r.get("skipped")]
@@ -602,15 +666,17 @@ def _make_plots(times_path, queries_path, out_dir):
     x = np.arange(len(labels))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 0.6), 5.5))
-    ax.bar(x - width / 2, df_q["strategic_exact_mean"], width,
-           yerr=df_q["strategic_exact_std"], capsize=3, label="Strategic Exact")
-    ax.bar(x + width / 2, df_q["query_all_mean"], width,
-           yerr=df_q["query_all_std"], capsize=3, label="Query All")
+    fig, ax = plt.subplots(figsize=(max(10, len(labels) * 1.2), 5.5))
+    width = 0.8 / len(CONDITIONS)
+    for i, cond in enumerate(CONDITIONS):
+        offset = (i - (len(CONDITIONS) - 1) / 2) * width
+        ax.bar(x + offset, df_q[f"{cond}_mean"], width,
+               yerr=df_q[f"{cond}_std"], capsize=2,
+               label=CONDITION_LABELS[cond])
     ax.set_ylabel("mean queries per episode")
-    ax.set_title("Strategic Exact vs. Query All")
+    ax.set_title("Query conditions — the four hypotheses against the VI baseline")
     _rotate_xticks(ax, labels, x)
-    ax.legend()
+    ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
     query_plot_path = os.path.join(out_dir, "query_counts.png")
     fig.savefig(query_plot_path, dpi=150)
@@ -654,13 +720,15 @@ def _make_plots(times_path, queries_path, out_dir):
 
 def _print_summary(time_rows, query_rows):
     """One line per configuration — everything shown is a mean over num_simu."""
-    print(f"\n{'game':<12}{'size':>5}{'hum':>5}{'|B_f|':>7}"
-          f"{'exact':>9}{'qall':>9}{'time(s)':>10}")
+    short = {"strategic_exact": "VI", "info_gain": "H1", "transition": "H2",
+             "proximity": "H3", "frequency": "H4", "query_all": "rand"}
+    header = "".join(f"{short[c]:>8}" for c in CONDITIONS)
+    print(f"\n{'game':<12}{'size':>5}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):
         if q["n_episodes"]:
-            queries = f"{q['strategic_exact_mean']:9.2f}{q['query_all_mean']:9.2f}"
+            queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in CONDITIONS)
         else:
-            queries = f"{row['skipped']:>18}"
+            queries = f"{row['skipped']:>{8 * len(CONDITIONS)}}"
         print(f"{row['game']:<12}{str(row['size']):>5}{row['num_humans']:>5}"
               f"{row['n_B_filter']:>7.1f}{queries}{row['t_total']:>10.2f}")
 

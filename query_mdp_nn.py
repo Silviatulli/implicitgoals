@@ -229,7 +229,11 @@ class QueryMDPVecEnv:
     Episodes reset automatically upon reaching an absorbing state.
     """
     def __init__(self, I_array, c_q, p_i, gamma, n_envs, rng, p_f=0.0,
-                 oracle_probs=None, bottleneck_sets=None):
+                 oracle_probs=None, bottleneck_sets=None, dominance=None):
+        # dominance: (n, n) bool or None — Hypothesis 2(ii).  dominance[b2, b1]
+        # means an oracle NO on b2 entails NO on b1, so b1 is ruled out without
+        # spending a query.  None (default) leaves stepping exactly as it was.
+        self.dominance = None if dominance is None else np.asarray(dominance, dtype=bool)
         self.T         = I_array
         self.len_I_array, self.n = I_array.shape
         self.c_q, self.p_i, self.p_f, self.gamma = c_q, p_i, p_f, gamma
@@ -274,6 +278,22 @@ class QueryMDPVecEnv:
         reward[failure] += self.gamma * self.p_f
         return done, reward
 
+    def apply_dominance(self):
+        """Hypothesis 2(ii): grant the NOs that the current K_not already entails.
+
+        b1 ⪯ b2 and b2 ∉ I_G ⇒ b1 ∉ I_G, so those bits are ruled out without
+        spending a query.  `dominance` is transitively closed, so one pass
+        reaches the fixpoint.  Bits the oracle answered YES are left alone —
+        contradicting one means no hypothesis survives, which the terminal test
+        already reports as a failure.
+
+        No-op when dominance is None, which is every condition except H2.
+        """
+        if self.dominance is None:
+            return
+        entailed    = (self.K_not[:, :, None] & self.dominance[None, :, :]).any(1)
+        self.K_not |= entailed & ~self.K_I
+
     def step(self, actions):
         idx = np.arange(self.n_envs)
         if self._bsets is not None:
@@ -283,6 +303,7 @@ class QueryMDPVecEnv:
             yes = self.rng.random(self.n_envs) < self.probs[actions]
         self.K_I  [idx[ yes], actions[ yes]] = True
         self.K_not[idx[~yes], actions[~yes]] = True
+        self.apply_dominance()
         done, reward = self._terminal_and_reward()
         next_obs     = self.obs()
         # Auto-reset: clear knowledge state and sample new recipe for done envs.
@@ -594,6 +615,7 @@ def _run_query_episode(env, true_canonical, choose_action, max_queries):
         else:
             env.K_not[0, action] = True
         n_q += 1
+        env.apply_dominance()   # H2 free NOs; no-op for every other condition
         done_arr, reward_arr = env._terminal_and_reward()
         if done_arr[0]:
             terminal_reward = float(reward_arr[0])
@@ -669,7 +691,8 @@ def evaluate_policy_on_real_human(
             return int(qv.argmax(1).cpu().item())
 
     for run in range(n_runs):
-        env = QueryMDPVecEnv(I_array, c_q, p_i, gamma, n_envs=1, rng=rng, p_f=p_f)
+        env = QueryMDPVecEnv(I_array, c_q, p_i, gamma, n_envs=1, rng=rng, p_f=p_f,
+                             dominance=getattr(policy_network, "dominance", None))
         if policy_network is None:
             env._random_iter = iter(shuffle_bottlenecks(list(range(n_bottleneck))))
         n_q, terminal_reward = _run_query_episode(env, true_canonical, choose_action,

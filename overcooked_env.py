@@ -565,3 +565,57 @@ def serving_matrices_move(grid_string=DEFAULT_GRID_STR, allow_drop: bool = False
         for r in RECIPES
     ]
     return T_R, T_H_list, RECIPES, grid_info
+
+
+def build_stochastic_matrix(next_states, start_state=0):
+    """Overcooked's T_R_sto — the deterministic counterpart of
+    gridworld_core.build_stochastic_matrix.
+
+    Overcooked is deterministic by construction: build_transition_matrix_nomove
+    emits T[state, action] -> next_state, with no slip and no MDP object behind
+    it.  Its transition "distribution" is a point mass, so T_R_sto has entries
+    in {0, 1} only.
+
+    Pruning is what makes that matrix affordable.  The kitchen enumerates ~38k
+    states but only a few hundred are reachable from the start, so the dense
+    lift drops from tens of GB to about one MB.
+
+    Returns
+    -------
+    T_R_sto : (n_reachable, n_actions, n_reachable) float64, one-hot.
+    index   : dict {full state ID -> row of T_R_sto}, the bijection back to the
+              38 417-state space the bottleneck pipeline names states in.
+    """
+    T = np.asarray(next_states)
+    if T.ndim != 2:
+        raise ValueError(f"expected (n_states, n_actions); got {T.shape}")
+    if not np.issubdtype(T.dtype, np.integer):
+        raise ValueError(f"expected integer state indices; got dtype {T.dtype}")
+    n_s, n_a = T.shape
+    if T.min() < 0 or T.max() >= n_s:
+        raise ValueError(
+            f"successor indices out of range for {n_s} states "
+            f"[{T.min()}, {T.max()}]")
+    if not 0 <= start_state < n_s:
+        raise ValueError(f"start_state {start_state} outside [0, {n_s})")
+
+    seen     = {int(start_state)}
+    frontier = deque([int(start_state)])
+    while frontier:
+        s = frontier.popleft()
+        for s2 in np.unique(T[s]):
+            if int(s2) not in seen:
+                seen.add(int(s2))
+                frontier.append(int(s2))
+
+    kept  = sorted(seen)
+    index = {s: i for i, s in enumerate(kept)}
+    n_r   = len(kept)
+
+    relabel        = np.full(n_s, -1, dtype=np.int64)
+    relabel[kept]  = np.arange(n_r)
+    succ           = relabel[T[kept]]          # (n_r, n_a) — successors are reachable too
+
+    T_sto = np.zeros((n_r, n_a, n_r), dtype=np.float64)
+    T_sto[np.arange(n_r)[:, None], np.arange(n_a)[None, :], succ] = 1.0
+    return T_sto, index

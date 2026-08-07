@@ -112,7 +112,9 @@ def _make_determinized(size, obstacles_percent, puddle_percent, model_type, visu
         mdp.visualize()
     t0 = time.time()
     next_states, start_idx, goal_idx = augment_mdp_to_deterministic(mdp)
-    return next_states, start_idx, goal_idx, time.time() - t0
+    # The MDP itself is returned too: it carries the stochastic transition
+    # probabilities that determinization discards, which Hypothesis 3 needs.
+    return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 
 def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
@@ -154,8 +156,9 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
         print(f"  total determinizing time: {total:.4f}s")
 
     return {
-        "robot": robot,
-        "humans": humans,
+        "robot": robot[:4],
+        "robot_mdp": robot[4],
+        "humans": [h[:4] for h in humans],
         "determinizing_times": det_times,
         "total_determinizing_time": total,
     }

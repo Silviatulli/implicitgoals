@@ -12,6 +12,7 @@ Only dependency: ``numpy``.
 """
 
 from queue import Queue
+from collections import deque
 from itertools import chain, combinations
 
 import numpy as np
@@ -300,3 +301,70 @@ def augment_mdp_to_deterministic(mdp):
     goal_idx = state_hashes.index(mdp.get_state_hash(mdp.get_goal_states()[0]))
 
     return next_states, start_idx, goal_idx
+
+
+def build_stochastic_matrix(mdp):
+    """The robot's stochastic model, pruned to the states reachable from the start.
+
+    This is the matrix the determinization throws away.  augment_mdp_to_deterministic
+    turns every (action, outcome) pair into its own action, which lets the agent
+    choose its own slip outcome; values computed from that determinized array are
+    therefore optimistic, not the values of M_R.
+
+    Returns
+    -------
+    T_R_sto : (n_reachable, n_actions, n_reachable) float64, P(s'|s,a) over the
+              *original* (un-augmented) actions, rows summing to 1.
+    index   : dict {state ID in mdp.get_state_space() order -> row of T_R_sto}.
+              The same full-space IDs augment_mdp_to_deterministic produces, so
+              a bottleneck ID from the pipeline maps straight through.
+
+    Reachability is settled before the matrix is built, so the expensive
+    O(|S|^2 |A|) probability scan only ever runs over the reachable states.
+    """
+    states  = mdp.get_state_space()
+    actions = mdp.get_actions()
+    n_s     = len(states)
+
+    hashes    = [mdp.get_state_hash(s) for s in states]
+    start_idx = hashes.index(mdp.get_state_hash(mdp.get_init_state()))
+
+    # Successors first (probabilities not needed yet), then BFS from the start.
+    successors = [set() for _ in range(n_s)]
+    for si, s in enumerate(states):
+        for a in actions:
+            for sj, s2 in enumerate(states):
+                if mdp.get_transition_probability(s, a, s2) > 1e-12:
+                    successors[si].add(sj)
+
+    seen     = {start_idx}
+    frontier = deque([start_idx])
+    while frontier:
+        s = frontier.popleft()
+        for s2 in successors[s]:
+            if s2 not in seen:
+                seen.add(s2)
+                frontier.append(s2)
+
+    kept  = sorted(seen)
+    index = {s: i for i, s in enumerate(kept)}
+    n_r   = len(kept)
+
+    T = np.zeros((n_r, len(actions), n_r), dtype=np.float64)
+    for i, si in enumerate(kept):
+        for ai, a in enumerate(actions):
+            for sj in successors[si]:
+                p = mdp.get_transition_probability(states[si], a, states[sj])
+                if p > 1e-12:
+                    T[i, ai, index[sj]] = p
+
+    # An action with no defined outcome becomes a self-loop, so every row is a
+    # distribution and value iteration cannot leak probability mass.
+    rowsum = T.sum(axis=2)
+    dead   = rowsum <= 1e-12
+    if dead.any():
+        di, da = np.nonzero(dead)
+        T[di, da, di] = 1.0
+        rowsum = T.sum(axis=2)
+    T /= rowsum[:, :, None]
+    return T, index
