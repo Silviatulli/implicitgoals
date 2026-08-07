@@ -34,6 +34,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib.legend_handler import HandlerTuple
 from tqdm import tqdm
 
 # ── Benchmark domains ─────────────────────────────────────────────────────────
@@ -64,32 +66,51 @@ from bottlenecks import (
     remove_toboggan_redundancies,
     find_maximally_achievable_subsets,
     subsets_to_array,
+    bottleneck_index,
     compute_bottlenecks_per_matrix,
     solve_query_mdp_exact,
-    # the four hypothesis conditions
+    # the selection rules, and H2's inference-time mask
     solve_query_mdp_info_gain,
-    solve_query_mdp_transition,
     solve_query_mdp_proximity,
     solve_query_mdp_frequency,
+    build_dominance,
     value_iteration_goal_probability,
 )
 from query_mdp_nn import evaluate_policy_on_real_human
 
 
-# The six conditions the paper compares.  "strategic_exact" is the value-iteration
-# baseline every hypothesis is measured against; "query_all" is the random-order
-# control.  Order matters: it fixes the CSV column order and the plot legend.
-CONDITIONS = ("strategic_exact", "info_gain", "transition",
-              "proximity", "frequency", "query_all")
+# Four selection rules, each run twice — once alone, once wearing the H2
+# dominance mask — plus the random-order control.  Nine columns.
+#
+# H2 gets no column of its own because it is not a selection rule: it never
+# chooses a query, it only widens K_not after a NO.  It is applied at inference
+# (evaluate_policy_on_real_human(dominance=...)), so the paired columns share one
+# policy object and differ only in whether the mask is passed.
+BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
+CONDITIONS = ("query_all",) + tuple(
+    c for b in BASES for c in (b, f"{b}_h2"))
 
-CONDITION_LABELS = {
+BASE_LABELS = {
     "strategic_exact": "VI baseline",
-    "info_gain":       "H1 Information Gain",
-    "transition":      "H2 Structural Redundancy",
+    "info_gain":       "H1 Info Gain",
     "proximity":       "H3 Goal Proximity",
     "frequency":       "H4 Query Frequency",
-    "query_all":       "Random",
 }
+CONDITION_LABELS = {"query_all": "Random"}
+for _b, _lab in BASE_LABELS.items():
+    CONDITION_LABELS[_b] = _lab
+    CONDITION_LABELS[f"{_b}_h2"] = f"{_lab} + H2"
+
+# One hue per selection rule, two shades of it: light for the rule alone, dark
+# for the same rule wearing H2.  So hue answers "which rule?" and shade answers
+# "with H2 or not?", and the height difference within a pair is what the
+# dominance layer bought.  tab20 is built for exactly this — ten (dark, light)
+# pairs of the same hue.  Random is grey: it is a control, not a rule.
+_TAB20 = plt.get_cmap("tab20").colors
+CONDITION_COLORS = {"query_all": "#9e9e9e"}
+for _i, _b in enumerate(BASES):
+    CONDITION_COLORS[_b]         = _TAB20[2 * _i + 1]   # light — rule alone
+    CONDITION_COLORS[f"{_b}_h2"] = _TAB20[2 * _i]       # dark  — rule + H2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,17 +220,17 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
 
       * the **hypothesis space** I — the maximally achievable subsets returned by
         Algorithm 1.  These are the candidate answers: "the human wants I_k".
-      * the **query alphabet** B_filter — what the robot is allowed to ask about.
+      * the **query set** B_filter — what the robot is allowed to ask about.
 
-    The alphabet is passed to solve_query_mdp_exact explicitly rather than being
+    B_filter is passed to solve_query_mdp_exact explicitly rather than being
     inferred from the labels present in I.  The difference is real: a bottleneck
     in B_filter that appears in no I_k can still be queried, and answering YES to
     it proves the human is incompatible with every hypothesis (failure), while
     answering NO is required before any hypothesis can be certified (success).
-    Inferring the alphabet from I would silently drop exactly those bottlenecks.
+    Inferring it from I would silently drop exactly those bottlenecks.
 
-    The alphabet is B_filter, not the raw union B: the exact solver allocates
-    3^|alphabet| knowledge states, and |B| reaches ~44 on Overcooked (3^44 ≈
+    It is B_filter, not the raw union B: the exact solver allocates
+    3^|B_filter| knowledge states, and |B| reaches ~44 on Overcooked (3^44 ≈
     10^21) against |B_filter| ~14 (3^14 ≈ 4.8M).  The toboggan filter is what
     makes the exact solve possible at all.
 
@@ -243,14 +264,17 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
 
     `success` is deliberately a single flag rather than one per policy: an
     episode succeeds iff the drawn human's bottleneck set (restricted to the
-    alphabet) is contained in some subset of I, which is a property of the
+    B_filter) is contained in some subset of I, which is a property of the
     instance and is therefore the same for every condition.  The individual
     episodes' own flags are discarded for that reason.
 
     One call is one repetition — main() averages over num_simu of them.
     """
+    # n_reachable is filled in by the Proximity stage below — it is the side of
+    # the matrix H3's value iteration actually runs on.  Seeded NaN here so every
+    # early return carries the column without repeating the assignment.
     row: dict = {"n_states": int(T_R.shape[0]), "n_actions": int(T_R.shape[1]),
-                 "n_humans": len(T_H_list)}
+                 "n_humans": len(T_H_list), "n_reachable": float("nan")}
 
     # B comes from the *candidate humans*, not from T_R — this is what the
     # reference implementation does, and it is what makes the problem non-empty.
@@ -294,7 +318,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
                     "n_I": float("nan"), "n_columns": float("nan")})
         # t_bottlenecks and t_oracle_sets already ran and hold real values —
         # only the stages that never got a chance to run are NaN'd here.
-        for stage in ["t_algorithm1"] + SOLVE_TIMES + SIM_TIMES:
+        for stage in ["t_algorithm1", "t_dominance"] + SOLVE_TIMES + SIM_TIMES:
             row[stage] = float("nan")
         row["skipped"] = f"{len(B_filter)} bottlenecks > {max_bottlenecks}"
         return row, {c: float("nan") for c in CONDITIONS}, float("nan")
@@ -305,22 +329,21 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
                                               goal_state, verbose=False)
     row["t_algorithm1"] = time.perf_counter() - t0
 
-    # The query alphabet: everything the robot may ask about.  It is B_filter,
+    # The query set: everything the robot may ask about.  It is B_filter,
     # *not* the labels occurring in I — see the docstring.  The same ordering is
     # handed to solve_query_mdp_exact, so the exact policy's action indices and
     # I_array's columns refer to the same bottleneck; letting the solver infer
     # its own order from I would silently desynchronise the two.
-    B_sorted  = sorted(int(b) for b in B_filter)
-    I_array  = subsets_to_array(I, B_sorted)
-    b_to_int = {b: j for j, b in enumerate(B_sorted)}
+    I_array  = subsets_to_array(I, B_filter)
+    b_to_int = bottleneck_index(B_filter)
 
     row.update({"n_B": len(B), "n_B_filter": len(B_filter),
-                "n_I": len(I), "n_columns": len(B_sorted)})
+                "n_I": len(I), "n_columns": len(B_filter)})
 
     # ── Query MDP ────────────────────────────────────────────────────────────
-    n = len(B_sorted)
+    n = len(B_filter)
     if n == 0 or n > max_exact_n:
-        for stage in SOLVE_TIMES + SIM_TIMES:
+        for stage in ["t_dominance"] + SOLVE_TIMES + SIM_TIMES:
             row[stage] = float("nan")
         row["skipped"] = "no bottlenecks" if n == 0 else f"3^{n} too large"
         tqdm.write(f"skipping Q-MDP exact because n = {n} bottlenecks")
@@ -331,35 +354,49 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
     # solver assumes a uniform 50/50 prior over every bottleneck.
     oracle = Oracle(oracle_sets, n_states=max(int(T_R.shape[0]), int(goal_state) + 1))
 
-    # ── Build one policy per condition, timing each in isolation ─────────────
-    # Transition solves its own copy of the query MDP rather than reusing the
-    # baseline's: solve_query_mdp_transition attaches `.dominance` to the policy
-    # it is handed, which would silently turn the baseline into H2 as well.
-    policies: dict = {}
+    # ── Build one policy per selection rule ─────────────────────────────────
+    # Each t_solve_* below is what that condition would cost *run on its own*.
+    # Work shared between conditions is therefore added to every condition that
+    # needs it, never counted once and amortised: the dominance mask is built
+    # once but charged to all four "+ H2" columns, because dropping the other
+    # three would not make it any cheaper for the one that remains.
+    policies, base_solve = {}, {}
     for name, solver in (("strategic_exact", solve_query_mdp_exact),
                          ("info_gain",       solve_query_mdp_info_gain),
-                         ("transition",      solve_query_mdp_transition),
                          ("frequency",       solve_query_mdp_frequency)):
         t0 = time.perf_counter()
         with _quiet():
-            policies[name] = solver(I, B_sorted, oracle=oracle)
-        row[f"t_solve_{name}"] = time.perf_counter() - t0
+            policies[name] = solver(I, B_filter, oracle=oracle)
+        base_solve[name] = time.perf_counter() - t0
 
-    # Proximity: the value iteration is part of H3's cost, so the stochastic
-    # model is built and solved inside this timer rather than hoisted out of it.
+    # Proximity carries its own value iteration: H3 depends on V_R, so building
+    # the stochastic model and solving it is part of H3's cost, not a free
+    # precomputation hoisted out of the timer.
     t0 = time.perf_counter()
     if sto_builder is None:
         policies["proximity"] = None
-        row["t_solve_proximity"] = float("nan")
+        base_solve["proximity"] = float("nan")
     else:
         with _quiet():
             T_R_sto, sto_index = sto_builder()
             V_R = value_iteration_goal_probability(T_R_sto, sto_index[int(goal_state)])
             policies["proximity"] = solve_query_mdp_proximity(
-                I, B_sorted, oracle=oracle, V_R=V_R, state_index=sto_index)
-        row["t_solve_proximity"] = time.perf_counter() - t0
+                I, B_filter, oracle=oracle, V_R=V_R, state_index=sto_index)
+        base_solve["proximity"] = time.perf_counter() - t0
+        # The pruned side of T_R_sto: how big the value iteration really was, as
+        # against n_states, which is how big the game's state space is on paper.
+        row["n_reachable"] = int(T_R_sto.shape[0])
 
-    policies["query_all"] = None   # the random-order control needs no solve
+    # H2's mask — computed once, charged to each column that wears it.
+    t0 = time.perf_counter()
+    with _quiet():
+        dominance = build_dominance(I, B_filter)
+    t_dominance = time.perf_counter() - t0
+    row["t_dominance"] = t_dominance
+
+    for base in BASES:
+        row[f"t_solve_{base}"]      = base_solve[base]
+        row[f"t_solve_{base}_h2"]   = base_solve[base] + t_dominance
 
     # The same human faces every condition within a repetition, so the counts are
     # paired: their differences are not polluted by which human was drawn.
@@ -367,13 +404,15 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
 
     counts, success = {}, float("nan")
     for name in CONDITIONS:
-        if name == "proximity" and policies["proximity"] is None:
+        base = name[:-3] if name.endswith("_h2") else name
+        if base != "query_all" and policies[base] is None:
             counts[name] = float("nan")
-            row["t_sim_proximity"] = float("nan")
+            row[f"t_sim_{name}"] = float("nan")
             continue
         t0 = time.perf_counter()
-        counts[name], flag = _query_episode(policies[name], oracle_bottlenecks,
-                                            I_array, b_to_int)
+        counts[name], flag = _query_episode(
+            policies.get(base), oracle_bottlenecks, I_array, b_to_int,
+            dominance=dominance if name.endswith("_h2") else None)
         row[f"t_sim_{name}"] = time.perf_counter() - t0
         # Every condition reports the same flag — see the docstring — so keeping
         # the last one is keeping the instance's flag.
@@ -383,16 +422,18 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
     return row, counts, success
 
 
-def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int):
+def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None):
     """Queries one episode needs against the human owning `oracle_bottlenecks`.
 
     `policy=None` is the Query All baseline (bottlenecks in random order);
-    an ExactQNet is the Strategic Exact policy.  Mirrors viz.compute.
+    otherwise it is one of the four selection rules.  `dominance` switches H2 on
+    for this episode only — the policy object is untouched, which is what lets
+    the same one serve both the plain and the "+ H2" column.
     """
     with _quiet():
         res = evaluate_policy_on_real_human(
             true_bottlenecks=oracle_bottlenecks, policy_network=policy,
-            n_runs=1, I_array=I_array, b_to_int=b_to_int,
+            n_runs=1, I_array=I_array, b_to_int=b_to_int, dominance=dominance,
         )
     return int(res["n_queries"][0]), int(res["success"][0])
 
@@ -402,12 +443,17 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Every t_* and n_* column is a mean over the num_simu repetitions.
+# The t_solve_* columns are per-condition standalone costs, so shared work is
+# added into each of them; t_dominance is that shared piece reported once, on its
+# own, and is therefore *not* a term you may add to a total — summing the
+# t_solve_* columns already counts it four times, deliberately.
 SOLVE_TIMES = [f"t_solve_{c}" for c in CONDITIONS if c != "query_all"]
 SIM_TIMES   = [f"t_sim_{c}"   for c in CONDITIONS]
 
 STAGE_TIMES = (["t_build", "t_bottlenecks", "t_toboggan_filter", "t_algorithm1",
-                "t_oracle_sets"] + SOLVE_TIMES + SIM_TIMES + ["t_total"])
-STAGE_SIZES = ["n_states", "n_actions", "n_humans",
+                "t_oracle_sets", "t_dominance"] + SOLVE_TIMES + SIM_TIMES
+               + ["t_total"])
+STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans",
                "n_B", "n_B_filter", "n_I", "n_columns"]
 
 TIME_FIELDS = (["game", "size", "num_humans", "num_simu"] + STAGE_SIZES
@@ -649,7 +695,13 @@ def _make_plots(times_path, queries_path, out_dir):
     """Read compute_times.csv / query_counts.csv back and render two PNGs
     into out_dir: one bar per (game, size, num_humans) combination in both.
 
-    query_counts.png   Strategic Exact vs Query All, mean queries per episode
+    query_counts.png   one subplot per configuration — a (size, humans) pair for
+                        the grid games, and one for Overcooked, which has no grid
+                        size.  Nine bars each: the four selection rules with and
+                        without H2, plus Random.  Per-config subplots rather than
+                        one shared axis because the configurations differ by an
+                        order of magnitude in |B_filter|, and a shared y-axis
+                        flattens the small ones into indistinguishable stubs.
     compute_times.png  2x2 grid: state-space size (n_states), hypothesis-space
                         cardinality (n_I), problem size (|B_filter|), and mean
                         wall-clock time — so the cost of a combination can be
@@ -661,23 +713,74 @@ def _make_plots(times_path, queries_path, out_dir):
     df_q = pd.read_csv(queries_path)
     df_t = pd.read_csv(times_path)
 
-    # ── query_counts.png ────────────────────────────────────────────────────
-    labels = df_q.apply(_combo_label, axis=1)
-    x = np.arange(len(labels))
-    width = 0.35
+    # ── query_counts.png — one subplot per configuration ────────────────────
+    # A configuration is a (size, num_humans) pair; Overcooked has no size and
+    # groups on num_humans alone.  Grid games sharing a pair share a subplot,
+    # one bar group per game.
+    configs, seen = [], set()
+    for _, r in df_q.iterrows():
+        key = ("overcooked", r["num_humans"]) if r["game"] == "overcooked" \
+              else ("grid", r["size"], r["num_humans"])
+        if key not in seen:
+            seen.add(key)
+            configs.append(key)
 
-    fig, ax = plt.subplots(figsize=(max(10, len(labels) * 1.2), 5.5))
-    width = 0.8 / len(CONDITIONS)
-    for i, cond in enumerate(CONDITIONS):
-        offset = (i - (len(CONDITIONS) - 1) / 2) * width
-        ax.bar(x + offset, df_q[f"{cond}_mean"], width,
-               yerr=df_q[f"{cond}_std"], capsize=2,
-               label=CONDITION_LABELS[cond])
-    ax.set_ylabel("mean queries per episode")
-    ax.set_title("Query conditions — the four hypotheses against the VI baseline")
-    _rotate_xticks(ax, labels, x)
-    ax.legend(fontsize=8, ncol=2)
-    fig.tight_layout()
+    ncols = min(3, len(configs))
+    nrows = int(np.ceil(len(configs) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, squeeze=False,
+                             figsize=(6.5 * ncols, 4.6 * nrows))
+    flat = [a for rowaxes in axes for a in rowaxes]
+
+    for ax, key in zip(flat, configs):
+        if key[0] == "overcooked":
+            sub = df_q[df_q["game"] == "overcooked"]
+            sub = sub[sub["num_humans"] == key[1]]
+            title = f"overcooked — {key[1]} humans"
+        else:
+            sub = df_q[(df_q["game"] != "overcooked")
+                       & (df_q["size"] == key[1])
+                       & (df_q["num_humans"] == key[2])]
+            # size arrives as float: Overcooked leaves the column empty, which
+            # makes pandas read the whole column as float.
+            side  = int(key[1])
+            title = f"{side}x{side} grid — {int(key[2])} humans"
+
+        games = list(sub["game"])
+        x = np.arange(len(games))
+        width = 0.85 / len(CONDITIONS)
+        for i, cond in enumerate(CONDITIONS):
+            offset = (i - (len(CONDITIONS) - 1) / 2) * width
+            ax.bar(x + offset, sub[f"{cond}_mean"], width,
+                   yerr=sub[f"{cond}_std"], capsize=2,
+                   color=CONDITION_COLORS[cond],
+                   label=CONDITION_LABELS[cond])
+        ax.set_title(title, fontsize=10)
+        ax.set_ylabel("mean queries per episode")
+        _rotate_xticks(ax, games, x)
+
+    for ax in flat[len(configs):]:      # unused cells in the last row
+        ax.axis("off")
+
+    # One shared legend — nine entries repeated per subplot would eat the axes.
+    # Each rule gets ONE entry whose swatch is its light|dark pair, so the legend
+    # has five entries instead of nine and the shade convention is shown rather
+    # than spelled out four times.  Nine flat entries also laid out badly: a
+    # legend fills column-major, so "VI + H2" ended up stacked above "H1".
+    pair_handles = [Patch(facecolor=CONDITION_COLORS["query_all"])]
+    pair_labels  = [CONDITION_LABELS["query_all"]]
+    for b in BASES:
+        pair_handles.append((Patch(facecolor=CONDITION_COLORS[b]),
+                             Patch(facecolor=CONDITION_COLORS[f"{b}_h2"])))
+        pair_labels.append(BASE_LABELS[b])
+    fig.legend(pair_handles, pair_labels, loc="lower center",
+               ncol=len(pair_labels), fontsize=10, frameon=False,
+               handler_map={tuple: HandlerTuple(ndivide=None, pad=0.0)},
+               handlelength=3.0, handletextpad=0.6, columnspacing=2.4,
+               title="left bar = rule alone   ·   right bar = rule + H2",
+               title_fontsize=9)
+    fig.suptitle("Query conditions — four selection rules, with and without H2",
+                 fontsize=12)
+    fig.tight_layout(rect=[0, 0.09, 1, 0.97])
     query_plot_path = os.path.join(out_dir, "query_counts.png")
     fig.savefig(query_plot_path, dpi=150)
     plt.close(fig)
@@ -688,10 +791,14 @@ def _make_plots(times_path, queries_path, out_dir):
 
     fig, axes = plt.subplots(2, 2, figsize=(max(11, len(labels_t) * 1.1), 10))
 
-    axes[0, 0].bar(x_t, df_t["n_states"], color="darkorange")
+    # n_reachable, not n_states: the value iteration runs on the pruned matrix,
+    # so this is the size H3 actually pays for.  On Overcooked the two differ by
+    # more than two orders of magnitude (~38k states on paper, a few hundred
+    # reachable), which is exactly what makes building T_R_sto affordable.
+    axes[0, 0].bar(x_t, df_t["n_reachable"], color="darkorange")
     axes[0, 0].set_yscale("log")
-    axes[0, 0].set_ylabel("n_states (log scale)")
-    axes[0, 0].set_title("State-space size (start of the pipeline)")
+    axes[0, 0].set_ylabel("n_reachable (log scale)")
+    axes[0, 0].set_title("States reachable from the start — the value-iteration matrix")
     _rotate_xticks(axes[0, 0], labels_t, x_t)
 
     axes[0, 1].bar(x_t, df_t["n_I"], color="mediumseagreen")
@@ -720,8 +827,9 @@ def _make_plots(times_path, queries_path, out_dir):
 
 def _print_summary(time_rows, query_rows):
     """One line per configuration — everything shown is a mean over num_simu."""
-    short = {"strategic_exact": "VI", "info_gain": "H1", "transition": "H2",
-             "proximity": "H3", "frequency": "H4", "query_all": "rand"}
+    short = {"query_all": "rand", "strategic_exact": "VI", "info_gain": "H1",
+             "proximity": "H3", "frequency": "H4"}
+    short.update({f"{b}_h2": f"{short[b]}+2" for b in BASES})
     header = "".join(f"{short[c]:>8}" for c in CONDITIONS)
     print(f"\n{'game':<12}{'size':>5}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):

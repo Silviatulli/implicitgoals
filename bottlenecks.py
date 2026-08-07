@@ -24,8 +24,12 @@ Pipeline
   2.  remove_toboggan_redundancies(T_R, B, goal|None)    → B_filter   true decision nodes
   3.  find_maximally_achievable_subsets(B_filter, T_R, start, goal)
                                                          → I          [Algorithm 1]
-  4.  subsets_to_array(I, columns)                       → I_array    bool (len_I_array, n)
-  5.  solve_query_mdp_exact(I, alphabet=columns, oracle) → ExactQNet  (3^n flat arrays)
+  4.  subsets_to_array(I, B_filter)                      → I_array    bool (len_I_array, n)
+  5.  solve_query_mdp_exact(I, B_filter, oracle=oracle)  → ExactQNet  (3^n flat arrays)
+
+B_filter is what the robot may ask about, and the bit order every policy and
+I_array agree on.  It is sorted at step 1 and that order is kept to the end of
+the pipeline; it is never derived from I — see _bit_order().
 
 The exact policy is evaluated against a deterministic real-human oracle by
 query_mdp_nn.evaluate_policy_on_real_human, which also provides the random-order
@@ -449,19 +453,24 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
 # 4.  Subset encodings  →  I_array
 # ─────────────────────────────────────────────────────────────────────────────
 
-def bottleneck_index(columns):
-    """{state ID: column index} for the bottleneck list indexing I_array's columns."""
-    return {int(b): j for j, b in enumerate(columns)}
+def bottleneck_index(B):
+    """{bottleneck: position} for the bottleneck list B — I_array's columns, and
+    equally the bit order of every policy built on the same B.
+
+    Goes through _as_label so a decoded tuple label works as well as a raw state
+    ID; this is the one place the map is built.
+    """
+    return {_as_label(b): j for j, b in enumerate(B)}
 
 
-def subsets_to_array(I, columns):
+def subsets_to_array(I, B):
     """
     Pack the subsets I into the bool matrix I_array.
 
     Parameters
     ----------
     I       : list[iterable[int]]  maximally achievable subsets, raw state IDs
-    columns : list[int]            bottleneck list defining the column order
+    B : list[int]            bottleneck list defining the column order
                                    (B_filter, or B when I was expanded back onto it)
 
     Returns
@@ -469,8 +478,8 @@ def subsets_to_array(I, columns):
     I_array : bool ndarray, shape (len(I), len(columns))
               I_array[k, j] is True iff columns[j] belongs to subset I[k].
     """
-    col_of = bottleneck_index(columns)
-    I_array = np.zeros((len(I), len(columns)), dtype=bool)
+    col_of = bottleneck_index(B)
+    I_array = np.zeros((len(I), len(B)), dtype=bool)
     for k, subset in enumerate(I):
         for b in subset:
             I_array[k, col_of[int(b)]] = True
@@ -627,34 +636,22 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
         Terminal value of failure states.
     oracle : Oracle or None
         Per-bottleneck P(YES).  None means uniform 50/50.
-    B : iterable of bottlenecks, or None
-        What the robot may query — the action set, and the bit order of the
-        returned policy.  None (default) infers it from the labels occurring in
-        I, which is the right choice when I already spans everything queryable.
-
-        Pass it explicitly when the queryable set is *wider* than I, e.g. the
-        full B_filter: a bottleneck belonging to no I_k is still worth asking
-        about, since YES proves the human matches no hypothesis (failure) and NO
-        is required before any hypothesis can be certified (success).  Inferring
-        the alphabet would drop exactly those bottlenecks, and would also let the
-        bit order drift from a caller-built I_array.  Must contain every label
-        occurring in I.
+    B : iterable of bottlenecks — mandatory
+        What the robot may query: the action set, and the bit order of the
+        returned policy.  It is B_filter, and it is deliberately *not* derivable
+        from I — a bottleneck belonging to no I_k is still worth asking about,
+        since YES proves the human matches no hypothesis (failure) and NO is
+        required before any hypothesis can be certified (success).  Deriving it
+        from I would drop exactly those bottlenecks and would let the bit order
+        drift from a caller-built I_array, both silently.  Must contain every
+        label occurring in I.
 
     Returns
     -------
     ExactQNet with attributes: V, best_action_mask, failure, success,
                                unique_B, B_to_idx, n, POW3, p_I
     """
-    if B is None:
-        unique_B = sorted({_as_label(b) for subset in I for b in subset})
-    else:
-        unique_B = sorted({_as_label(b) for b in B  if b in B})
-        missing  = {_as_label(b) for subset in I for b in subset} - set(unique_B)
-        if missing:
-            raise ValueError(
-                f"alphabet is missing {len(missing)} bottleneck(s) present in I: "
-                f"{sorted(missing)[:5]}{'...' if len(missing) > 5 else ''}")
-    B_to_idx = {b: i for i, b in enumerate(unique_B)}
+    unique_B, B_to_idx = _bit_order(I, B)
     n        = len(unique_B)
     FULL_MASK = (1 << n) - 1
 
@@ -752,7 +749,7 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 # of them owns the knowledge state and none of them decides when to stop —
 # QueryMDPVecEnv does that, with the same I_hat ⊆ I_k test solve_query_mdp_exact
 # uses (§7).  So every condition is comparable to the VI baseline by
-# construction, and a condition is just a scoring rule over the alphabet.
+# construction, and a condition is just a scoring rule over B.
 #
 # The exception is H2, which is not a selection rule at all: it is an
 # answer-preserving reduction that grants extra NOs for free after each oracle
@@ -760,22 +757,49 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 # composes with any of the others.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _alphabet(I, B):
-    """Bit/column order shared by every solver here — see solve_query_mdp_exact."""
+def _bit_order(I, B):
+    """Check B, and return it with the {bottleneck: bit} map every solver shares.
+
+    Bit i means B[i] — in the policy's action index, in I_array's column i, and
+    in the env's K_I / K_not bit i.  Those three must agree or the robot asks
+    about one bottleneck and files the answer under another, silently.
+
+    B is *validated*, never repaired.  It arrives sorted and unique because it is
+    sorted once where it is built and that order is kept for the rest of the
+    pipeline; re-sorting it here would be worse than useless, since a caller who
+    built I_array from an unsorted B would get columns that no longer line up
+    with the bits.  An order that is wrong should stop the run, not be quietly
+    corrected underneath the caller.
+
+    B is likewise mandatory, with no fallback to the labels occurring in I: those
+    are a strict subset of B_filter, so deriving B would drop the bottlenecks
+    belonging to no I_k and change the answer without failing.
+    """
     if B is None:
-        unique_B = sorted({_as_label(b) for subset in I for b in subset})
-    else:
-        unique_B = sorted({_as_label(b) for b in B})
-        missing  = {_as_label(b) for subset in I for b in subset} - set(unique_B)
-        if missing:
-            raise ValueError(
-                f"alphabet is missing {len(missing)} bottleneck(s) present in I: "
-                f"{sorted(missing)[:5]}{'...' if len(missing) > 5 else ''}")
-    return unique_B, {b: i for i, b in enumerate(unique_B)}
+        raise ValueError(
+            "B is mandatory — pass B_filter. It cannot be derived from I: the "
+            "bottlenecks belonging to no I_k are exactly the ones I does not "
+            "mention, and dropping them changes the answer.")
+    B = [_as_label(b) for b in B]
+    if not B:
+        raise ValueError("B is empty — there is nothing the robot may query.")
+    if len(set(B)) != len(B):
+        raise ValueError("B has duplicates — two bits would mean one bottleneck.")
+    if B != sorted(B):
+        raise ValueError(
+            "B is not sorted.  It is sorted where it is built and that order is "
+            "the bit order for the whole pipeline; re-sorting it here would "
+            "desynchronise the bits from an I_array built on the order given.")
+    missing = {_as_label(b) for subset in I for b in subset} - set(B)
+    if missing:
+        raise ValueError(
+            f"B is missing {len(missing)} bottleneck(s) present in I: "
+            f"{sorted(missing)[:5]}{'...' if len(missing) > 5 else ''}")
+    return B, bottleneck_index(B)
 
 
 def _hypothesis_matrix(I, B_to_idx):
-    """Φ as a bool matrix, shape (len(I), n): row k is I[k] in alphabet order."""
+    """Φ as a bool matrix, shape (len(I), n): row k is I[k] in B's order."""
     T = np.zeros((len(I), len(B_to_idx)), dtype=bool)
     for k, subset in enumerate(I):
         for b in subset:
@@ -908,7 +932,7 @@ class GreedyQNet(nn.Module):
 def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None):
     """Hypothesis 1 — one-step weighted-entropy minimisation over Φ(B, K_I)."""
-    unique_B, B_to_idx = _alphabet(I, B)
+    unique_B, B_to_idx = _bit_order(I, B)
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
                       unique_B, B_to_idx, rule="entropy")
 
@@ -916,7 +940,7 @@ def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None):
     """Hypothesis 4 — the bottleneck in the most currently consistent hypotheses."""
-    unique_B, B_to_idx = _alphabet(I, B)
+    unique_B, B_to_idx = _bit_order(I, B)
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
                       unique_B, B_to_idx, rule="marginal")
 
@@ -935,7 +959,7 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
     A bottleneck missing from state_index is unreachable under M_R, so it
     cannot lie on any path to the goal; it scores 0 and is asked last.
     """
-    unique_B, B_to_idx = _alphabet(I, B)
+    unique_B, B_to_idx = _bit_order(I, B)
     if V_R is None or state_index is None:
         raise ValueError(
             "solve_query_mdp_proximity needs both V_R and state_index — they are "
@@ -943,25 +967,28 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
             "start_state, goal_state).")
     V_R = np.asarray(V_R, dtype=np.float64)
     if not all(isinstance(b, (int, np.integer)) for b in unique_B):
-        raise ValueError("state_index is keyed by raw state ID, so the alphabet "
-                         "must be raw state IDs, not decoded tuples.")
+        raise ValueError("state_index is keyed by raw state ID, so B must be "
+                         "raw state IDs, not decoded tuples.")
     score = np.array([V_R[state_index[b]] if b in state_index else 0.0
                       for b in unique_B])
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
                       unique_B, B_to_idx, rule="static", static_score=score)
 
 
-def solve_query_mdp_transition(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
-                               oracle: "Oracle | None" = None, base=None):
+def build_dominance(I, B):
     """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G.
 
-    Not a selection rule: `base` (default: the VI policy) still chooses every
-    query.  The reduction rides along as `.dominance`, which QueryMDPVecEnv
-    applies after each NO to rule out dominated bottlenecks for free.  Attach it
-    to any other policy to layer H2 on that condition instead.
+    Deliberately not a solver.  H2 is not a selection rule: it never chooses a
+    query, it only widens K_not after an oracle NO, so it is a *layer* that any
+    condition can wear.  What it returns is the mask, handed to
+    evaluate_policy_on_real_human(dominance=...) at inference time; no policy is
+    computed here and no policy is modified.
+
+    That separation is what lets one policy serve both the "H1" and "H1 + H2"
+    columns — the two runs differ only in whether this mask is passed.
+
+    Returns (n, n) bool: dom[b2, b1] is True iff b1 ⪯ b2, i.e. ∀ϕ ∈ Φ,
+    b1 ∈ ϕ ⇒ b2 ∈ ϕ.  Transitively closed, so one propagation pass suffices.
     """
-    unique_B, B_to_idx = _alphabet(I, B)
-    policy = base if base is not None else solve_query_mdp_exact(
-        I, B, C_Q=C_Q, p_I=p_I, gamma=gamma, p_F=p_F, oracle=oracle)
-    policy.dominance = _dominance_closure(_hypothesis_matrix(I, B_to_idx))
-    return policy
+    _, B_to_idx = _bit_order(I, B)
+    return _dominance_closure(_hypothesis_matrix(I, B_to_idx))

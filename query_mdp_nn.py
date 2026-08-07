@@ -596,8 +596,8 @@ def _run_query_episode(env, true_canonical, choose_action, max_queries):
     choose_action(env) → action index
 
     The empty knowledge state is tested for absorption *before* the loop.  It can
-    already be terminal: I_hat = ~K_not starts as the whole alphabet, so if that
-    alphabet is contained in some I_k the instance is solved with zero questions.
+    already be terminal: I_hat = ~K_not starts as the whole of B, so if B is
+    contained in some I_k the instance is solved with zero questions.
     Entering the loop regardless would bill one query for a problem that never
     posed a question — and would pick that query from an all-zero
     best_action_mask, since a policy has no meaningful action at an absorbing
@@ -634,12 +634,17 @@ def evaluate_policy_on_real_human(
     p_f=0.0,
     gamma=0.99,
     device="cpu",
+    dominance=None,
 ):
     """
     Evaluate a query policy against a real human with known implicit subgoals.
 
     The oracle answers deterministically: YES iff the queried bottleneck is in
     true_bottlenecks.
+
+    `dominance` is Hypothesis 2(ii), from bottlenecks.build_dominance().  It is
+    applied here, at inference, and never reaches the policy: the same
+    policy_network run with and without it gives the "X" and "X + H2" columns.
 
     If policy_network is None ("query-all" baseline), bottlenecks are queried
     in a fresh random order each run via shuffle_bottlenecks — no network needed.
@@ -692,7 +697,7 @@ def evaluate_policy_on_real_human(
 
     for run in range(n_runs):
         env = QueryMDPVecEnv(I_array, c_q, p_i, gamma, n_envs=1, rng=rng, p_f=p_f,
-                             dominance=getattr(policy_network, "dominance", None))
+                             dominance=dominance)
         if policy_network is None:
             env._random_iter = iter(shuffle_bottlenecks(list(range(n_bottleneck))))
         n_q, terminal_reward = _run_query_episode(env, true_canonical, choose_action,

@@ -112,15 +112,25 @@ and `results/query_counts.png`.
 
 ## TODO / next steps
 
-- **Replace 'n_states' with the number of states reachabel from the start state.** (only modify layer 3)
+- ~~**Replace 'n_states' with the number of states reachabel from the start state.** (only modify layer 3)~~ — **DONE**
 
-  The current plot express thee ~40k states instead of ~120 for Overcooked, which is misleading.
+  ~~The current plot express thee ~40k states instead of ~120 for Overcooked, which is misleading.~~
 
-- **Add the other Query-MDP solving methods.** (only modify layer 3)
+  The first panel of `compute_times.png` now plots `n_reachable`, the side of
+  the pruned matrix the value iteration actually runs on (161 for Overcooked
+  against 38 417 on paper). `n_states` is kept as a CSV column.
 
-  `solve_query_mdp_exact` (Strategic VI) is the only one wired in right
+- ~~**Add the other Query-MDP solving methods.** (only modify layer 3)~~ — **DONE**
+
+  ~~`solve_query_mdp_exact` (Strategic VI) is the only one wired in right
   now. I will try to copy paste your other methods developed on the other
-  branch and hook them into `experiment.py`.
+  branch and hook them into `experiment.py`.~~
+
+  All four hypotheses are wired into `experiment.py`, giving nine columns:
+  Random, plus each of VI / H1 Info Gain / H3 Goal Proximity / H4 Query
+  Frequency run with and without the H2 dominance mask. H2 has no column of
+  its own because it is not a selection rule — it is applied at inference via
+  `evaluate_policy_on_real_human(dominance=...)`.
 
 - **Add more variants of the games.** (only modify layer 1)
 
