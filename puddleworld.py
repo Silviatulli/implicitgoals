@@ -39,7 +39,7 @@ class PuddleWorld(GridWorld):
     do not block movement, so transitions match a plain grid's."""
 
     def __init__(self, size=5, start=None, goal=None, obstacles_percent=0.1,
-                 puddle_percent=0.2, puddle_penalty=-1, goal_reward=1,
+                 puddle_percent=0.2, puddle_penalty=-1, goal_reward=10,
                  slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1):
         super().__init__(size=size, start=start, goal=goal,
                          obstacles_percent=obstacles_percent,
@@ -52,16 +52,31 @@ class PuddleWorld(GridWorld):
         self.reward_func = self.puddle_reward_func
 
     def place_puddles(self):
+        """Puddles on free cells only, and never on the start or the goal.
+
+        The goal exclusion is load-bearing, not tidiness.  The goal is absorbing,
+        so a puddle there makes the sink pay puddle_penalty on its own self-loop
+        for ever and V(goal) settles at puddle_penalty/(1-gamma) = -100 instead
+        of 0 — the mirror image of the goal_reward leak puddle_reward_func
+        guards against.  Reusing protected_cells() keeps this in step with the
+        obstacle placement, which excludes exactly the same cells.
+        """
         total_puddles = int(self.size * self.size * self.puddle_percent)
+        protected = self.protected_cells()
         for _ in range(total_puddles):
             x = np.random.randint(self.size)
             y = np.random.randint(self.size)
-            if self.map[x, y] == 0:
+            if self.map[x, y] == 0 and (x, y) not in protected:
                 self.map[x, y] = 0.5
 
     def puddle_reward_func(self, state, action, next_state):
         x, y = next_state[0]
-        if self.check_goal_reached(next_state):
+        # "and not already there" matters: the goal is absorbing, so without it
+        # the goal's own self-loop keeps paying goal_reward and V(goal) settles
+        # at goal_reward/(1-gamma) = 100 instead of 0.  The reward belongs on the
+        # transition that *enters* the goal, exactly as in GridWorld.
+        if (self.check_goal_reached(next_state[0])
+                and not self.check_goal_reached(state[0])):
             return self.goal_reward
         elif self.map[x, y] == 0.5:
             return self.puddle_penalty
@@ -86,11 +101,22 @@ class PuddleWorld(GridWorld):
 
 
 def generate_and_visualize_puddleworld(size, start, goal, obstacles_percent, puddle_percent,
-                                       model_type="Model", obstacle_seed=None):
-    """Generate a ``PuddleWorld`` (mirrors the function in experiments.py)."""
+                                       model_type="Model", obstacle_seed=None,
+                                       puddle_penalty=-1, goal_reward=10):
+    """Generate a ``PuddleWorld`` (mirrors the function in experiments.py).
+
+    ``puddle_penalty`` and ``goal_reward`` are forwarded rather than dropped:
+    their ratio is what decides whether V_R encodes distance-to-goal or merely
+    local puddle density, and Hypothesis 3 ranks bottlenecks by V_R.  At the old
+    1:1 ratio the goal reward was the same size as the penalties accumulated on
+    the way to it, and corr(V_R, distance) averaged only -0.56; at 10:1 it is
+    -0.82, close to the -0.97 that the pre-reward-mode H3 used to get.
+    """
     return PuddleWorld(size=size, start=start, goal=goal,
                        obstacles_percent=obstacles_percent,
                        puddle_percent=puddle_percent,
+                       puddle_penalty=puddle_penalty,
+                       goal_reward=goal_reward,
                        obstacle_seed=obstacle_seed)
 
 

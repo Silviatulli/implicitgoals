@@ -8,9 +8,19 @@ Exported from the *implicitgoals* research repo. Builds on the shared
 and taxiworld.py — see that module for the shared plumbing).
 
 RockWorld is a GridWorld with valuable rocks (map value ``1``) and dangerous
-rocks (``2``). Rocks only change the *reward*; they do **not** block movement,
-so the determinized transition array has the same structure as a plain grid
-with the same obstacles.
+rocks (``2``). Rocks do **not** block movement — they only change the *reward*
+and what the agent has collected.
+
+A state is ``[position, collected]``: one bit per valuable rock, so that "each
+rock pays once" is Markov.  That multiplies the state count by
+``2 ** len(valuable_positions)``, which is why the number of valuable rocks is
+capped at ``MAX_VALUABLE_ROCKS``.  Reaching the goal collapses every collection
+set into the single canonical sink ``[goal_pos, (0,)*k]``, so the pipeline still
+has exactly one goal state.
+
+Rewards are additive cost-to-go: ``−1`` per step everywhere except the goal
+(which pays ``0`` and is absorbing), ``+10`` the first time a valuable rock is
+entered, ``−5`` for a dangerous one.
 
 Quick start
 -----------
@@ -24,6 +34,7 @@ Quick start
 
 import time
 import random
+from itertools import product
 
 import numpy as np
 
@@ -34,15 +45,30 @@ from gridworld_core import GridWorld, augment_mdp_to_deterministic
 # RockWorld (ported from RockWorldClass.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Collected rocks live in the state, so each valuable rock doubles the state
+# space.  The cap keeps that exponential in check: at the default sweep size 8 an
+# uncapped board carries 7 valuable rocks (128x the states, ~86 s to determinize
+# a single model), which makes the experiment infeasible.  3 rocks is 8x.
+MAX_VALUABLE_ROCKS = 3
+
+
 class RockWorld(GridWorld):
     """GridWorld with valuable rocks (``1``) and dangerous rocks (``2``). Rocks
     change rewards only; they do not block movement, so transitions match a
-    plain grid's."""
+    plain grid's.
+
+    A state is ``[position, collected]``, where ``collected`` is one bit per
+    valuable rock (in ``valuable_positions`` order).  Carrying that set in the
+    state is what makes "each rock pays once" Markov: the old implementation
+    mutated ``self.map`` inside the reward to remember, which corrupted the map
+    and made the reward depend on evaluation order.
+    """
 
     def __init__(self, size=5, start=None, goal=None, obstacles_percent=0.1,
                  rock_percent=0.3, valuable_rock_ratio=0.4,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
-                 slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1):
+                 slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1,
+                 max_valuable_rocks=MAX_VALUABLE_ROCKS):
         super().__init__(size=size, start=start, goal=goal,
                          obstacles_percent=obstacles_percent,
                          slip_prob=slip_prob, discount=discount,
@@ -51,37 +77,112 @@ class RockWorld(GridWorld):
         self.valuable_rock_ratio = valuable_rock_ratio
         self.valuable_rock_reward = valuable_rock_reward
         self.dangerous_rock_penalty = dangerous_rock_penalty
+        self.max_valuable_rocks = max_valuable_rocks
+        self.valuable_positions = []
         self.place_rocks()
         self.reward_func = self.rock_reward_func
+        # GridWorld.__init__ built the state space before the rocks existed, so
+        # it has no collected bits yet.  Now that they are placed, rebuild it.
+        self.state_space = None
+        self.create_state_space()
 
+    # ── State space ──────────────────────────────────────────────────────────
+    def create_state_space(self):
+        """``[position, collected]`` for every cell and every collection subset.
+
+        The goal collapses: whatever you have picked up, entering the goal lands
+        in the single canonical sink ``[goal_pos, (0,)*k]``.  That keeps one
+        unambiguous goal state for the pipeline (which needs exactly one) while
+        leaving collection optional and purely reward-driven.
+        """
+        k = len(getattr(self, "valuable_positions", []))
+        self.state_space = []
+        for i in range(self.size):
+            for j in range(self.size):
+                if (i, j) == self.goal_pos:
+                    self.state_space.append([(i, j), (0,) * k])
+                else:
+                    for collected in product((0, 1), repeat=k):
+                        self.state_space.append([(i, j), collected])
+
+    def _next_collected(self, collected, next_pos):
+        """The collection set after stepping onto ``next_pos`` — the only way it
+        ever changes, and it only ever gains bits."""
+        if next_pos == self.goal_pos:
+            return (0,) * len(self.valuable_positions)      # canonical sink
+        updated = list(collected)
+        for i, pos in enumerate(self.valuable_positions):
+            if pos == next_pos:
+                updated[i] = 1
+        return tuple(updated)
+
+    # ── Rocks ────────────────────────────────────────────────────────────────
     def place_rocks(self):
         total_rocks = int(self.size * self.size * self.rock_percent)
-        valuable_rocks = int(total_rocks * self.valuable_rock_ratio)
+        valuable_rocks = min(int(total_rocks * self.valuable_rock_ratio),
+                             self.max_valuable_rocks)
         dangerous_rocks = total_rocks - valuable_rocks
+        self.valuable_positions = []
         for _ in range(valuable_rocks):
-            self.place_rock(1)
+            pos = self.place_rock(1)
+            if pos is not None:
+                self.valuable_positions.append(pos)
         for _ in range(dangerous_rocks):
             self.place_rock(2)
 
     def place_rock(self, rock_type):
-        while True:
-            x = np.random.randint(self.size)
-            y = np.random.randint(self.size)
-            if self.map[x, y] == 0:
-                self.map[x, y] = rock_type
-                break
+        """Drop a rock on a free cell, or return None when the board is full.
+
+        Start and goal are excluded: a rock on the goal could never be collected
+        (entering the goal collapses the collection set), and the old unbounded
+        ``while True`` spun for ever on a board with no free cell left.
+        """
+        free = [(x, y) for x in range(self.size) for y in range(self.size)
+                if self.map[x, y] == 0
+                and (x, y) != self.start_pos and (x, y) != self.goal_pos]
+        if not free:
+            return None
+        x, y = free[np.random.randint(len(free))]
+        self.map[x, y] = rock_type
+        return (x, y)
+
+    # ── Dynamics and reward ──────────────────────────────────────────────────
+    def get_transition_probability(self, state, action, state_prime):
+        """Position moves exactly as in a plain grid; the collection set is a
+        deterministic function of where you land, so any inconsistent successor
+        has probability 0."""
+        if tuple(state_prime[1]) != self._next_collected(tuple(state[1]),
+                                                         state_prime[0]):
+            return 0
+        return super().get_transition_probability(state, action, state_prime)
 
     def rock_reward_func(self, state, action, next_state):
-        x, y = next_state[0]
-        if self.check_goal_reached(next_state):
-            return self.valuable_rock_reward
-        elif self.map[x, y] == 1:
-            self.map[x, y] = 0
-            return self.valuable_rock_reward
-        elif self.map[x, y] == 2:
-            return self.dangerous_rock_penalty
-        else:
-            return -1
+        """Cost-to-go: −1 per step everywhere except the goal, which pays 0.
+
+        Rewards are additive, so stepping onto a fresh valuable rock nets
+        −1 + 10 = +9 and onto a dangerous one −1 − 5 = −6.  The valuable bonus is
+        paid only when the rock's bit actually flips 0→1, so revisiting a
+        collected rock is just another −1 — enforced by the state, not by
+        mutating the map.  There is no bonus for arriving at the goal: a reward
+        paid at an absorbing state cannot change the policy and would only break
+        V(goal) = 0.
+        """
+        if self.check_goal_reached(state[0]):
+            return 0                                    # the sink pays nothing
+        reward = -1
+        next_pos = next_state[0]
+        for i, pos in enumerate(self.valuable_positions):
+            if pos == next_pos and not state[1][i] and next_state[1][i]:
+                reward += self.valuable_rock_reward
+        if self.map[next_pos] == 2:
+            reward += self.dangerous_rock_penalty
+        return reward
+
+    def get_init_state(self):
+        return [self.start_pos, (0,) * len(self.valuable_positions)]
+
+    def get_goal_states(self):
+        return [[self.goal_pos, (0,) * len(self.valuable_positions)]]
 
     def visualize(self):
         for i in range(self.size):

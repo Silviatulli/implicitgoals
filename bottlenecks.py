@@ -807,28 +807,47 @@ def _xlog2x(v):
     return out
 
 
-def value_iteration_goal_probability(T_R_sto, goal_state,
-                                     gamma=0.99, tol=1e-10, max_iter=10_000):
-    """V_R: expected discounted probability of reaching goal_state under M_R.
+def value_iteration(T_R_sto, goal_state, reward_function=None,
+                    states=None, actions=None,
+                    gamma=0.99, tol=1e-10, max_iter=10_000):
+    """V_R: the robot's optimal state value under M_R.
 
-    Value iteration on the robot's *stochastic* model, with the goal absorbing
-    and worth 1:
+    Two modes, chosen by whether a reward function is supplied.
 
-        V(goal) = 1
-        V(s)    = γ · max_a Σ_s' P(s'|s,a) · V(s')
+    Reward mode (reward_function given).  Standard value iteration driven by the
+    MDP's own reward, with the goal treated as absorbing:
 
-    On a deterministic model this collapses to V(s) = γ^d(s) for d = shortest
-    path length to the goal, and to 0 for states that cannot reach it.
+        V(s) = max_a [ R(s,a) + γ · Σ_s' P(s'|s,a) · V(s') ]
+
+    where R(s,a) = Σ_s' P(s'|s,a) · reward_function(s, a, s') is the expected
+    immediate reward, built once from the callable over the pruned state space.
+    The goal is absorbing at reward 0 in M_R, so V(goal) converges to 0 and
+    value cannot leak out of it.  For the grid's reach-the-goal reward this
+    gives V(s) = γ^{d(s)-1} for d = shortest path length to the goal — monotone
+    in distance, which is all H3's ranking needs — and 0 where the goal is
+    unreachable.
+
+    Probability mode (reward_function is None).  The legacy behaviour, kept for
+    models with no reward object (e.g. Overcooked): the goal is pinned worth 1
+    and V is the expected discounted probability of reaching it,
+
+        V(goal) = 1 ,   V(s) = γ · max_a Σ_s' P(s'|s,a) · V(s').
 
     Parameters
     ----------
-    T_R_sto    : (n, n_actions, n) float — P(s'|s,a), rows summing to 1, as
-                 returned by gridworld_core.build_stochastic_matrix or
-                 overcooked_env.build_stochastic_matrix.  Those builders have
-                 already pruned it to the robot-reachable states and returned
-                 the index that maps state IDs into it; nothing is pruned here.
-    goal_state : int — the absorbing goal's row in T_R_sto, i.e. index[goal].
-    gamma      : discount.
+    T_R_sto         : (n, n_actions, n) float — P(s'|s,a), rows summing to 1, as
+                      returned by gridworld_core.build_stochastic_matrix or
+                      overcooked_env.build_stochastic_matrix.  Already pruned to
+                      the robot-reachable states; nothing is pruned here.
+    goal_state      : int — the absorbing goal's row in T_R_sto, i.e.
+                      index[goal].  Used to pin V in probability mode.
+    reward_function : callable(state, action, next_state) -> float, or None.
+                      When given, `states` and `actions` must be too.
+    states          : list — states[i] is the original state object at row i of
+                      T_R_sto (build_stochastic_matrix's kept_states), so the
+                      callable can be evaluated on the pruned matrix.
+    actions         : list — action labels in T_R_sto's action-axis order.
+    gamma           : discount.
 
     Returns
     -------
@@ -840,11 +859,39 @@ def value_iteration_goal_probability(T_R_sto, goal_state,
             "T_R_sto must be (n_states, n_actions, n_states) probabilities; got "
             f"{T.shape}.  Build it with build_stochastic_matrix().")
 
-    V = np.zeros(T.shape[0], dtype=np.float64)
-    V[goal_state] = 1.0
+    if reward_function is None:
+        # Probability mode: goal absorbing and worth 1, no reward term.
+        V = np.zeros(T.shape[0], dtype=np.float64)
+        V[goal_state] = 1.0
+        for _ in range(max_iter):
+            V_next = gamma * np.max(T @ V, axis=1)
+            V_next[goal_state] = 1.0
+            converged = np.max(np.abs(V_next - V)) < tol
+            V = V_next
+            if converged:
+                break
+        return V
+
+    if states is None or actions is None:
+        raise ValueError(
+            "reward mode needs `states` and `actions` to evaluate the reward "
+            "callable on the pruned matrix; pass the kept_states and actions "
+            "returned by build_stochastic_matrix().")
+
+    n, n_a, _ = T.shape
+    # Expected immediate reward R(s,a) = Σ_s' P(s'|s,a)·reward(s,a,s'), built
+    # once from the callable over the reachable successors of each row.
+    R_sa = np.zeros((n, n_a), dtype=np.float64)
+    for i in range(n):
+        si = states[i]
+        for ai in range(n_a):
+            a = actions[ai]
+            for j in np.nonzero(T[i, ai])[0]:
+                R_sa[i, ai] += T[i, ai, j] * reward_function(si, a, states[j])
+
+    V = np.zeros(n, dtype=np.float64)
     for _ in range(max_iter):
-        V_next = gamma * np.max(T @ V, axis=1)
-        V_next[goal_state] = 1.0
+        V_next = np.max(R_sa + gamma * (T @ V), axis=1)
         converged = np.max(np.abs(V_next - V)) < tol
         V = V_next
         if converged:
@@ -950,29 +997,57 @@ def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None,
                               V_R=None, state_index=None):
-    """Hypothesis 3 — query bottlenecks in decreasing V_R, the robot's expected
-    discounted probability of reaching the goal.
+    """Hypothesis 3 — query bottlenecks in decreasing V_R, the robot's optimal
+    state value under M_R.
 
-    state_index is the second half of what build_stochastic_matrix() returns —
-    it maps a raw state ID to its row in the pruned T_R_sto — and V_R is what
-    value_iteration_goal_probability() returns for that same T_R_sto, so V_R is
+    What V_R *measures* depends on which mode value_iteration ran in, and H3 does
+    not care.  Reward mode (the grid games, which carry a reward function) makes
+    it a discounted return, on whatever scale that game's reward uses; probability
+    mode (Overcooked, which has no reward object) makes it the discounted
+    probability of reaching the goal, in [0, 1].  Only the *ordering* is read, so
+    no absolute scale is assumed anywhere below — see the +inf note.
+
+    state_index is the second return value of build_stochastic_matrix() — it maps
+    a raw state ID to its row in the pruned T_R_sto — and V_R is what
+    value_iteration() returns for that same T_R_sto, so V_R is
     indexed by pruned row.  Time the builder and the value iteration together
     with this call: both are part of H3's cost, not a free precomputation.
 
-    A bottleneck missing from state_index is unreachable under M_R, so it
-    cannot lie on any path to the goal; it scores 0 and is asked last.
+    A bottleneck missing from state_index is unreachable under M_R.  It is asked
+    **first**: no achievable subset can contain it, so it belongs to no
+    hypothesis, and a YES on it proves the human's subgoal set lies outside I —
+    failure, detected immediately instead of after the whole budget is spent.
     """
     unique_B, B_to_idx = _bit_order(I, B)
     if V_R is None or state_index is None:
         raise ValueError(
             "solve_query_mdp_proximity needs both V_R and state_index: "
-            "T_R_sto, state_index = build_stochastic_matrix(...) and then "
-            "V_R = value_iteration_goal_probability(T_R_sto, state_index[goal]).")
+            "T_R_sto, state_index, *rest = build_stochastic_matrix(...) and "
+            "then V_R = value_iteration(T_R_sto, state_index[goal], *rest).  "
+            "The *rest absorbs the grid builder's (reward_function, states, "
+            "actions) and is empty for Overcooked's, which is exactly the "
+            "difference between reward mode and probability mode.")
     V_R = np.asarray(V_R, dtype=np.float64)
     if not all(isinstance(b, (int, np.integer)) for b in unique_B):
         raise ValueError("state_index is keyed by raw state ID, so B must be "
                          "raw state IDs, not decoded tuples.")
-    score = np.array([V_R[state_index[b]] if b in state_index else 0.0
+    # Two tiers, unconditionally: every bottleneck the robot cannot reach is
+    # asked before any bottleneck it can, and only inside the second tier does
+    # V_R decide the order.
+    #
+    # This is not a tie-breaking nicety, it is where the questions are.  A
+    # bottleneck unreachable in M_R cannot sit in any achievable subset, so it
+    # belongs to no hypothesis — which makes B \ I exactly the unreachable set.
+    # Success requires a NO on every bottleneck outside the chosen hypothesis
+    # (only NOs shrink I_hat), so those are precisely the queries that must be
+    # spent; a YES on one instead proves the human is outside I and ends the
+    # episode immediately.  Either way, asking them first is never wasted.
+    #
+    # +inf rather than a value derived from V_R: V_R's range moves with the game
+    # and the board (roughly [-45, +17] on rockworld, [0, 1] on gridworld), so
+    # any finite sentinel would drift between "first" and "last".  Queried
+    # actions are masked to -1e9 by the caller, so +inf is safe here.
+    score = np.array([V_R[state_index[b]] if b in state_index else np.inf
                       for b in unique_B])
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
                       unique_B, B_to_idx, rule="static", static_score=score)

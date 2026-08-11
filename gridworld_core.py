@@ -4,8 +4,8 @@ gridworld_core.py — shared GridWorld MDP base + determinization helper.
 
 Factored out of gridworld.py / puddleworld.py / rockworld.py / taxiworld.py,
 which used to each carry a byte-for-byte copy of this code. This module holds
-the plain stochastic 2D grid (``GridWorld``), its BFS/powerset helpers, and
-the stochastic-to-deterministic MDP conversion (``augment_mdp_to_deterministic``)
+the plain stochastic 2D grid (``GridWorld``), its BFS helper, and the
+stochastic-to-deterministic MDP conversion (``augment_mdp_to_deterministic``)
 that all four world types use identically.
 
 Only dependency: ``numpy``.
@@ -13,7 +13,6 @@ Only dependency: ``numpy``.
 
 from queue import Queue
 from collections import deque
-from itertools import chain, combinations
 
 import numpy as np
 
@@ -21,12 +20,6 @@ import numpy as np
 # ─────────────────────────────────────────────────────────────────────────────
 # Small helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-def powerset(iterable):
-    """All subsets of ``iterable`` as tuples (includes the empty tuple)."""
-    s = list(iterable)
-    return list(chain.from_iterable(combinations(s, r) for r in range(len(s) + 1)))
-
 
 def _bfs_reachable(start_state, goal_test, successor_generator):
     """Breadth-first search; returns the action path to a goal, or None."""
@@ -52,8 +45,10 @@ def _bfs_reachable(start_state, goal_test, successor_generator):
 
 class GridWorld:
     """2D grid MDP. Ported from ``GridWorldClass.py`` (visualization / value
-    iteration helpers dropped). A state is ``[(row, col), (), ()]``; the empty
-    tuples are placeholders for optional agent features / locatables.
+    iteration helpers dropped). A state is ``[(row, col)]`` — a one-element list,
+    so that ``state[0]`` is the position in every world.  Subclasses append their
+    own slots: RockWorld carries a collected-rocks tuple, TaxiWorld a
+    passenger/delivered pair.
 
     Randomness is controlled by ``obstacle_seed`` (feeds ``np.random.seed``), so
     two calls with the same seed give the same map. ``obstacles_percent`` sets
@@ -64,17 +59,15 @@ class GridWorld:
     """
 
     def __init__(self, size=5, start=None, goal=None, obstacles_percent=0.1,
-                 divide_rooms=False, room_count=4, agent_features=None,
-                 locatables=None, slip_prob=0.1, discount=0.99, max_tries=100,
-                 obstacle_seed=1, starting_features=None):
+                 divide_rooms=False, room_count=4,
+                 slip_prob=0.1, discount=0.99, max_tries=100,
+                 obstacle_seed=1):
         self.size = size
         self.start_pos = start
         self.goal_pos = goal
         self.obstacles_percent = obstacles_percent
         self.divide_rooms = divide_rooms
         self.room_count = room_count
-        self.agent_features = agent_features if agent_features is not None else []
-        self.locatables = locatables if locatables is not None else []
         self.slip_prob = slip_prob
         self.reward_func = self.goal_reward_func
         self.map = np.zeros((size, size))
@@ -86,10 +79,16 @@ class GridWorld:
         curr_tries = 0
         while not valid_config_found and curr_tries < max_tries:
             self.map = np.zeros((size, size))
+            # Start and goal *first*.  protected_cells() is what keeps obstacles
+            # off them, and it can only do that if they already exist — placed
+            # afterwards, as they used to be, protected_cells() saw {None} and
+            # the two cells were protected only when the caller happened to pass
+            # them explicitly.  When both are passed (every experiment path)
+            # this consumes no randomness, so generated maps are unchanged.
+            self.place_start_and_goal()
             self.place_random_obstacles()
             if self.divide_rooms:
                 self.divide_into_rooms()
-            self.place_start_and_goal()
             if self.check_for_path():
                 valid_config_found = True
             else:
@@ -100,20 +99,29 @@ class GridWorld:
             self.place_start_and_goal()
 
         self.create_state_space()
-        self.start_features = starting_features if starting_features is not None else []
         assert slip_prob >= 0 and slip_prob * 3 <= 1, \
             "Slip probability should be >= 0 and 3*slip_prob <= 1."
 
     # ── Map construction ─────────────────────────────────────────────────────
+    def protected_cells(self):
+        """Cells an obstacle must never cover. Subclasses widen this.
+
+        TaxiWorld adds the passenger: when one location is shared across the
+        robot and every human, burying it under one model's obstacles would
+        force that model to relocate and silently break the sharing.
+        """
+        return {self.start_pos, self.goal_pos}
+
     def place_random_obstacles(self):
         self.state_space = None
         np.random.seed(self.obstacle_seed)
         total_obstacles = int(self.size * self.size * self.obstacles_percent)
+        protected = self.protected_cells()
         obstacles_placed = 0
         while obstacles_placed < total_obstacles:
             x = np.random.randint(self.size)
             y = np.random.randint(self.size)
-            if (x, y) != self.start_pos and (x, y) != self.goal_pos and self.map[x, y] != -1:
+            if (x, y) not in protected and self.map[x, y] != -1:
                 self.map[x, y] = -1
                 obstacles_placed += 1
 
@@ -131,6 +139,11 @@ class GridWorld:
         self.map[room_divider, y1] = 0
         y2 = np.random.randint(room_divider + 1, self.size)
         self.map[room_divider, y2] = 0
+        # The dividers are drawn blind, so they can bury the start or the goal.
+        # Reopen those cells: same invariant place_random_obstacles keeps.
+        for cell in self.protected_cells():
+            if cell is not None:
+                self.map[cell] = 0
 
     def place_start_and_goal(self):
         if self.start_pos is None:
@@ -152,6 +165,17 @@ class GridWorld:
     def check_goal_reached(self, state):
         return state == self.goal_pos
 
+    def is_absorbing_state(self, state):
+        """True when no action can leave `state` — the terminal sink.
+
+        Takes a *full* state (unlike check_goal_reached, which takes a position).
+        Defaults to "the agent stands on the goal cell", which is what the
+        reach-the-goal games want.  TaxiWorld overrides it: its destination cell
+        must stay passable until the passenger has actually been delivered, so
+        there the sink is the `delivered` flag, not the position.
+        """
+        return self.check_goal_reached(state[0])
+
     def check_for_path(self):
         if self.start_pos is None or self.goal_pos is None:
             return False
@@ -164,15 +188,9 @@ class GridWorld:
     def create_state_space(self):
         if self.state_space is not None:
             return None
-        self.state_space = []
-        for i in range(self.size):
-            for j in range(self.size):
-                current_state = [(i, j)]
-                for agent_feature_set in powerset(self.agent_features):
-                    for locatable_set in powerset(self.locatables):
-                        current_state.append(agent_feature_set)
-                        current_state.append(locatable_set)
-                self.state_space.append(current_state)
+        self.state_space = [[(i, j)]
+                            for i in range(self.size)
+                            for j in range(self.size)]
 
     def get_state_space(self):
         if self.state_space is None:
@@ -184,7 +202,7 @@ class GridWorld:
             return 1 if state == state_prime else 0
         if self.map[state_prime[0]] == -1:
             return 0
-        if self.check_goal_reached(state[0]):
+        if self.is_absorbing_state(state):
             return 1 if state == state_prime else 0
 
         x, y = state[0]
@@ -223,7 +241,10 @@ class GridWorld:
         return self.get_transition_probability_for_move(state, action, state_prime)
 
     def goal_reward_func(self, state, action, next_state):
-        if self.check_goal_reached(next_state) and not self.check_goal_reached(state):
+        # check_goal_reached compares a bare position, so reward on the state's
+        # *position* component: the whole state is a list and would never equal
+        # goal_pos, which would silently make this reward always 0.
+        if self.check_goal_reached(next_state[0]) and not self.check_goal_reached(state[0]):
             return 1
         return 0
 
@@ -233,11 +254,19 @@ class GridWorld:
     def get_reward(self, state, action, next_state):
         return self.reward_func(state, action, next_state)
 
+    def get_reward_function(self):
+        """The callable R(state, action, next_state) scoring transitions.
+
+        value_iteration() evaluates it over the pruned state space to build the
+        per-(state, action) reward that drives V_R.  Subclasses override
+        reward_func, so this stays generic across the grid games."""
+        return self.reward_func
+
     def get_init_state(self):
-        return [self.start_pos, tuple(self.start_features), tuple(self.locatables)]
+        return [self.start_pos]
 
     def get_goal_states(self):
-        return [[self.goal_pos, tuple(self.start_features), tuple(self.locatables)]]
+        return [[self.goal_pos]]
 
     def visualize(self):
         """ASCII render of the grid. Subclasses override this to show their
@@ -313,14 +342,29 @@ def build_stochastic_matrix(mdp):
 
     Returns
     -------
-    T_R_sto : (n_reachable, n_actions, n_reachable) float64, P(s'|s,a) over the
-              *original* (un-augmented) actions, rows summing to 1.
-    index   : dict {state ID in mdp.get_state_space() order -> row of T_R_sto}.
-              The same full-space IDs augment_mdp_to_deterministic produces, so
-              a bottleneck ID from the pipeline maps straight through.
+    A 5-tuple.  The first two are the model; the last three are what
+    bottlenecks.value_iteration needs to run in *reward* mode rather than
+    probability mode, and are the only reason this returns more than a matrix.
+
+    T_R_sto     : (n_reachable, n_actions, n_reachable) float64, P(s'|s,a) over
+                  the *original* (un-augmented) actions, rows summing to 1.
+    index       : dict {state ID in mdp.get_state_space() order -> row of
+                  T_R_sto}.  The same full-space IDs
+                  augment_mdp_to_deterministic produces, so a bottleneck ID from
+                  the pipeline maps straight through.
+    reward_func : callable(state, action, next_state) -> float, the MDP's own
+                  reward.  Its presence is what selects reward mode.
+    kept_states : list — kept_states[i] is the original state *object* at row i,
+                  so the callable (which is keyed by objects, not row indices)
+                  can be evaluated on the pruned, reindexed matrix.
+    actions     : list — action labels in T_R_sto's action-axis order.
 
     Reachability is settled before the matrix is built, so the expensive
     O(|S|^2 |A|) probability scan only ever runs over the reachable states.
+
+    Note for callers: Overcooked's build_stochastic_matrix returns only the
+    first two.  `T, index, *rest = build_stochastic_matrix(...)` followed by
+    `value_iteration(T, index[goal], *rest)` is correct for both.
     """
     states  = mdp.get_state_space()
     actions = mdp.get_actions()
@@ -330,6 +374,8 @@ def build_stochastic_matrix(mdp):
     start_idx = hashes.index(mdp.get_state_hash(mdp.get_init_state()))
 
     # Successors first (probabilities not needed yet), then BFS from the start.
+    # This O(|S|^2 |A|) scan is the dominant cost of the whole H3 stage — far
+    # more than the value iteration it feeds.
     successors = [set() for _ in range(n_s)]
     for si, s in enumerate(states):
         for a in actions:
@@ -367,4 +413,8 @@ def build_stochastic_matrix(mdp):
         T[di, da, di] = 1.0
         rowsum = T.sum(axis=2)
     T /= rowsum[:, :, None]
-    return T, index
+    # kept_states[i] is the original state object at row i of T; together with
+    # `actions` it lets value_iteration evaluate the reward callable on the
+    # pruned, reindexed matrix (the callable is keyed by state objects).
+    kept_states = [states[k] for k in kept]
+    return T, index, mdp.get_reward_function(), kept_states, actions

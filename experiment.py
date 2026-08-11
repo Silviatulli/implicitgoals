@@ -78,7 +78,7 @@ from bottlenecks import (
     solve_query_mdp_proximity,
     solve_query_mdp_frequency,
     build_dominance,
-    value_iteration_goal_probability,
+    value_iteration,
     evaluate_policy_on_real_human,
 )
 
@@ -166,8 +166,7 @@ def build_grid_instance(game, size, num_humans, seed=None, obstacles_percent=0.1
     T_H_list = [h[0] for h in out["humans"]]
     # Deferred, not built here: Hypothesis 3 is timed with its own value
     # iteration included, so the stochastic model is built inside that timer.
-    sto_builder = lambda: grid_stochastic_matrix(out["robot_mdp"])
-    return (T_R, T_H_list, start_state, goal_state, sto_builder), build_time
+    return (T_R, T_H_list, start_state, goal_state, out["robot_mdp"]), build_time
 
 
 def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
@@ -206,18 +205,22 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
         T_R, T_H_list = serving_matrices_nomove(T_base, recipes)
     build_time = time.perf_counter() - t0
 
-    # See build_grid_instance: deferred so its cost lands inside t_solve_proximity.
-    sto_builder = lambda: overcooked_stochastic_matrix(
-        np.asarray(T_R, dtype=np.int64), 0)
-    return (T_R, T_H_list, 0, CLIENT_SERVED, sto_builder), build_time
+    # A size-4 instance: no MDP object (Overcooked has none). run_instance builds
+    # the stochastic matrix from T_R itself, inside H3's timer.
+    return (T_R, T_H_list, 0, CLIENT_SERVED), build_time
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The experiment — one repetition: one instance in, one timing row out
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
+def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                  max_exact_n=17, filter_toboggans=False, max_bottlenecks=18):
+    # mdp_R feeds Hypothesis 3's value iteration:
+    #   * a robot MDP object (grid games) → reward-driven V_R;
+    #   * None (Overcooked, which has no MDP object) → the stochastic matrix is
+    #     built from the raw next-state matrix T_R and V_R is goal-reaching
+    #     probability.
     """Run the whole pipeline once on one instance and time every stage.
 
     The Query MDP has two distinct inputs, and they are not the same set:
@@ -394,19 +397,26 @@ def run_instance(T_R, T_H_list, start_state, goal_state, sto_builder=None,
     # the stochastic model and solving it is part of H3's cost, not a free
     # precomputation hoisted out of the timer.
     t0 = time.perf_counter()
-    if sto_builder is None:
-        policies["proximity"] = None
-        base_solve["proximity"] = float("nan")
-    else:
-        with _quiet():
-            T_R_sto, sto_index = sto_builder()
-            V_R = value_iteration_goal_probability(T_R_sto, sto_index[int(goal_state)])
-            policies["proximity"] = solve_query_mdp_proximity(
-                I, B_filter, oracle=oracle, V_R=V_R, state_index=sto_index)
-        base_solve["proximity"] = time.perf_counter() - t0
-        # The pruned side of T_R_sto: how big the value iteration really was, as
-        # against n_states, which is how big the game's state space is on paper.
-        row["n_reachable"] = int(T_R_sto.shape[0])
+    with _quiet():
+        if mdp_R is not None:
+            # Grid games pass their robot MDP → reward-driven value iteration.
+            T_R_sto, sto_index, reward_function, states, actions = \
+                grid_stochastic_matrix(mdp_R)
+            V_R = value_iteration(T_R_sto, sto_index[int(goal_state)],
+                                  reward_function, states, actions)
+        else:
+            # No MDP object (Overcooked): build the stochastic matrix straight
+            # from the raw next-state matrix T_R; V_R is the goal-reaching
+            # probability. Built here, inside the timer, on purpose.
+            T_R_sto, sto_index = overcooked_stochastic_matrix(
+                np.asarray(T_R, dtype=np.int64), int(start_state))
+            V_R = value_iteration(T_R_sto, sto_index[int(goal_state)])
+        policies["proximity"] = solve_query_mdp_proximity(
+            I, B_filter, oracle=oracle, V_R=V_R, state_index=sto_index)
+    base_solve["proximity"] = time.perf_counter() - t0
+    # The pruned side of T_R_sto: how big the value iteration really was, as
+    # against n_states, which is how big the game's state space is on paper.
+    row["n_reachable"] = int(T_R_sto.shape[0])
 
     # H2's mask — computed once, charged to each column that wears it.
     t0 = time.perf_counter()

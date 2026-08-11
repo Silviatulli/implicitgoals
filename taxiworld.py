@@ -8,9 +8,18 @@ Exported from the *implicitgoals* research repo. Builds on the shared
 and rockworld.py — see that module for the shared plumbing).
 
 TaxiWorld is a GridWorld where a taxi must pick up a passenger and drop it at a
-destination. A state is ``[(row, col), passenger_in_taxi]`` and the action set
-adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves slip (10%); pickup /
-dropoff are deterministic.
+destination. A state is ``[(row, col), passenger_in_taxi, delivered]`` and the
+action set adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves slip
+(10%); pickup / dropoff are deterministic.
+
+``delivered`` latches True only on a dropoff at the destination while carrying,
+and never resets, so the goal ``[destination, False, True]`` means "task
+complete" — not merely "standing on the destination", which a taxi that never
+picked the passenger up could also satisfy.  It is also the sink: the
+destination cell stays passable until the delivery actually happens.
+
+Rewards are cost-to-go: ``−1`` per action until delivery, ``0`` for ever after,
+and an extra ``−10`` for dropping the passenger anywhere else.
 
 NOTE: the ``generate_and_visualize_taxiworld`` in the repo's ``experiments.py``
 was out of sync with the ``TaxiWorld`` constructor (it passed multi-passenger
@@ -40,18 +49,28 @@ from gridworld_core import GridWorld, augment_mdp_to_deterministic
 
 class TaxiWorld(GridWorld):
     """GridWorld + a passenger to pick up and drop at a destination. State is
-    ``[(row, col), passenger_in_taxi]``; actions add ``pickup`` / ``dropoff``."""
+    ``[(row, col), passenger_in_taxi, delivered]``; actions add ``pickup`` /
+    ``dropoff``.  The third slot latches on a successful delivery and makes the
+    goal ``[destination, False, True]`` mean "task complete" rather than merely
+    "standing on the destination"."""
 
     def __init__(self, size=5, start=None, passenger_loc=None, destination=None,
                  obstacles_percent=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
-                 obstacle_seed=1):
+                 obstacle_seed=1, wrong_dropoff_penalty=-10):
         self.size = size  # needed before place_random_location
         self.passenger_loc = passenger_loc if passenger_loc is not None else self.place_random_location()
+        self.wrong_dropoff_penalty = wrong_dropoff_penalty
         super().__init__(size=size, start=start, goal=destination,
                          obstacles_percent=obstacles_percent, slip_prob=slip_prob,
                          discount=discount, max_tries=max_tries, obstacle_seed=obstacle_seed)
         self.destination = self.goal_pos  # reuse goal_pos as destination
         self.reward_func = self.taxi_reward_func
+        # The passenger was drawn before the map existed, so it may have landed
+        # under an obstacle or in a walled-off pocket.  That used to be
+        # harmless — the old goal [destination, False] was reachable without
+        # ever collecting the passenger — but the delivered goal is not, so an
+        # unreachable passenger now means an unreachable goal.  Fix it here.
+        self._ensure_passenger_reachable()
 
     def place_random_location(self):
         while True:
@@ -59,54 +78,112 @@ class TaxiWorld(GridWorld):
             if not hasattr(self, 'map') or self.map[x, y] != -1:
                 return (x, y)
 
-    def place_start_and_goal(self):
-        super().place_start_and_goal()
+    def protected_cells(self):
+        """Keep obstacles off the passenger as well as the start and goal.
+
+        The passenger location is shared by the robot and every human of an
+        instance, so it must survive each model's independent obstacle draw.
+        """
+        return super().protected_cells() | {self.passenger_loc}
+
+    def _reachable_positions(self):
+        """Cells reachable from the start by moves (obstacles block)."""
+        seen, frontier = {self.start_pos}, [self.start_pos]
+        while frontier:
+            for nxt, _ in self.get_all_neighbors(frontier.pop()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+        return seen
+
+    def _ensure_passenger_reachable(self):
+        """Relocate the passenger if it is unreachable from the start.
+
+        Prefers a cell the taxi can actually drive to; the destination itself is
+        allowed (pick up and drop off on the spot) and is the last-resort choice,
+        since start→destination connectivity is already guaranteed by
+        GridWorld.check_for_path.
+        """
+        reachable = self._reachable_positions()
+        if self.passenger_loc in reachable:
+            return
+        candidates = sorted(reachable - {self.destination})
+        self.passenger_loc = (candidates[np.random.randint(len(candidates))]
+                              if candidates else self.destination)
 
     def get_actions(self):
         return super().get_actions() + ["pickup", "dropoff"]
 
     def create_state_space(self):
+        """States are ``[position, passenger_in_taxi, delivered]``.
+
+        ``delivered`` latches True on a successful dropoff at the destination and
+        never resets — that is what separates "delivered" from "never picked the
+        passenger up".  Only three flag combinations are legal: (False, False)
+        not started / wrongly dropped off, (True, False) carrying, (False, True)
+        delivered.  You cannot hold a passenger you have already delivered, so
+        (True, True) is never enumerated.
+        """
         self.state_space = []
         for i in range(self.size):
             for j in range(self.size):
-                for passenger_in_taxi in [False, True]:
-                    self.state_space.append([(i, j), passenger_in_taxi])
+                for carrying, delivered in ((False, False), (True, False), (False, True)):
+                    self.state_space.append([(i, j), carrying, delivered])
+
+    def is_absorbing_state(self, state):
+        """The sink is *delivery*, not the destination cell.
+
+        Overriding this keeps the destination passable until the job is done: the
+        taxi may drive across it while fetching the passenger, and only
+        ``[destination, False, True]`` self-loops.
+        """
+        return state[2]
 
     def get_transition_probability(self, state, action, state_prime):
-        x, y = state[0]
-        passenger_in_taxi = state[1]
-        passenger_in_taxi_prime = state_prime[1]
+        pos, carrying, delivered = state[0], state[1], state[2]
+
+        if delivered:                        # absorbing: the task is over
+            return 1 if state == state_prime else 0
 
         if action in ["up", "down", "left", "right"]:
-            move_prob = super().get_transition_probability(state, action, state_prime)
-            return move_prob if passenger_in_taxi == passenger_in_taxi_prime else 0
+            # Moving changes the position only; both flags must carry over.
+            if state_prime[1] != carrying or state_prime[2]:
+                return 0
+            return super().get_transition_probability(state, action, state_prime)
         elif action == "pickup":
-            if (x, y) != self.passenger_loc or passenger_in_taxi:
+            if pos != self.passenger_loc or carrying:
                 return 1 if state == state_prime else 0
-            else:
-                return 1 if state_prime == [(x, y), True] else 0
+            return 1 if state_prime == [pos, True, False] else 0
         elif action == "dropoff":
-            if not passenger_in_taxi:
+            if not carrying:
                 return 1 if state == state_prime else 0
-            else:
-                return 1 if state_prime == [(x, y), False] else 0
+            if pos == self.destination:      # the delivery — latch `delivered`
+                return 1 if state_prime == [pos, False, True] else 0
+            return 1 if state_prime == [pos, False, False] else 0    # wrong place
         return 0
 
     def taxi_reward_func(self, state, action, next_state):
-        if action == "dropoff" and next_state[0] == self.destination and state[1] and not next_state[1]:
-            return 20
-        elif action == "pickup" and state[0] == self.passenger_loc and not state[1] and next_state[1]:
+        """Cost-to-go: −1 per action until delivery, 0 for ever after.
+
+        The delivery itself is an ordinary step (−1): there is no bonus at the
+        absorbing state, since a reward paid *at* a sink cannot change the policy
+        and only breaks V(goal) = 0.  Dropping the passenger anywhere other than
+        the destination still costs an extra −10 on top of the step.
+        """
+        if state[2]:                         # already delivered: nothing is paid
             return 0
-        elif action == "dropoff" and state[1] and not next_state[1]:
-            return -10
-        else:
-            return -1
+        reward = -1
+        if action == "dropoff" and state[1] and not next_state[2]:
+            reward += self.wrong_dropoff_penalty
+        return reward
 
     def get_init_state(self):
-        return [self.start_pos, False]
+        return [self.start_pos, False, False]
 
     def get_goal_states(self):
-        return [[self.destination, False]]
+        # Delivered *and* actually transported — unreachable by merely driving to
+        # the destination, which is the whole point of the third slot.
+        return [[self.destination, False, True]]
 
     def visualize(self):
         for i in range(self.size):
@@ -146,14 +223,17 @@ def generate_and_visualize_taxiworld(size, start, goal, obstacles_percent,
 # High-level driver — robot + N humans, with compute timing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_determinized(size, obstacles_percent, model_type, visualize=False):
+def _make_determinized(size, obstacles_percent, model_type, visualize=False,
+                       passenger_loc=None):
     """Generate one taxi world and determinize it; returns (next_states, s0, g, det_time).
 
-    If ``visualize`` is True, print the generated map before determinizing.
+    ``passenger_loc`` is passed down so every model of an instance shares it; see
+    generate_determinized_models.  If ``visualize`` is True, print the generated
+    map before determinizing.
     """
     mdp = generate_and_visualize_taxiworld(
         size=size, start=(0, 0), goal=(size - 1, size - 1),
-        obstacles_percent=obstacles_percent,
+        obstacles_percent=obstacles_percent, passenger_loc=passenger_loc,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -187,8 +267,18 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
         random.seed(seed)
         np.random.seed(seed)
 
-    robot = _make_determinized(size, obstacles_percent, "Robot Model", visualize)
-    humans = [_make_determinized(size, obstacles_percent, f"Human Model {i + 1}", visualize)
+    # One passenger for the whole instance: the robot and every human agree on
+    # where the fare is, and only the obstacle map varies between them — the same
+    # convention the other grid games follow for start and goal.  Drawing it per
+    # model instead made each human's pickup its own bottleneck, so |B| (the
+    # union over humans) grew with the human count and blew past
+    # --max-bottlenecks, skipping every taxi repetition.
+    passenger_loc = (random.randint(0, size - 1), random.randint(0, size - 1))
+
+    robot = _make_determinized(size, obstacles_percent, "Robot Model", visualize,
+                               passenger_loc=passenger_loc)
+    humans = [_make_determinized(size, obstacles_percent, f"Human Model {i + 1}",
+                                 visualize, passenger_loc=passenger_loc)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
