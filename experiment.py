@@ -45,7 +45,10 @@ from tqdm import tqdm
 # ── Benchmark domains ─────────────────────────────────────────────────────────
 from gridworld import generate_determinized_models as generate_determinized_gridworlds
 from puddleworld import generate_determinized_models as generate_determinized_puddleworlds
-from rockworld import generate_determinized_models as generate_determinized_rockworlds
+from rockworld import (
+    generate_determinized_models as generate_determinized_rockworlds,
+    MAX_VALUABLE_ROCKS,
+)
 from taxiworld import generate_determinized_models as generate_determinized_taxiworlds
 
 from overcooked_env import (
@@ -565,6 +568,57 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+# A RockWorld board above this many states is flagged as slow before the sweep
+# starts.  505 is size 8 at the default densities and already costs ~3.4 s per
+# repetition against ~0.08 s for gridworld, so the cut sits just below it and
+# leaves the small boards (size 6 → 281) unflagged.
+ROCKWORLD_SLOW_STATES = 400
+
+
+def _rockworld_state_estimate(size, rock_percent, valuable_rock_ratio=0.4):
+    """States of one RockWorld board: size^2 positions x 2^k collection sets.
+
+    Mirrors RockWorld.place_rocks and create_state_space — k valuable rocks,
+    capped at MAX_VALUABLE_ROCKS, contribute one bit each, and the goal collapses
+    to a single sink whatever has been collected (hence the -1 / +1).
+    `valuable_rock_ratio` repeats RockWorld's own default; the experiment never
+    overrides it, so it is not exposed on the command line.
+    """
+    total_rocks = int(size * size * rock_percent)
+    k = min(int(total_rocks * valuable_rock_ratio), MAX_VALUABLE_ROCKS)
+    return (size * size - 1) * 2 ** k + 1
+
+
+def _warn_slow_rockworld(jobs, num_simu, rock_percent):
+    """Announce the RockWorld jobs that will crawl, and where on the bar.
+
+    Nothing here is at risk of diverging or being skipped: the 2^k collection
+    bits simply multiply the state space that both the determinized build and
+    Hypothesis 3's value iteration walk, so those jobs run an order of magnitude
+    slower per repetition than the plain grids.  Printing the slice of the
+    progress bar they occupy is the point — an hour of near-frozen bar in that
+    range is expected, not a hang.
+    """
+    slow = [i for i, (game, size, _) in enumerate(jobs)
+            if game == "rockworld"
+            and _rockworld_state_estimate(size, rock_percent) >= ROCKWORLD_SLOW_STATES]
+    if not slow:
+        return
+    # The flagged jobs are contiguous (one game, sizes in order), so first and
+    # last bound the whole stretch of the bar they own.
+    total = len(jobs) * num_simu
+    lo = 100.0 * slow[0] * num_simu / total
+    hi = 100.0 * (slow[-1] + 1) * num_simu / total
+    boards = sorted({jobs[i][1] for i in slow})
+    sizes = ", ".join(f"{s}x{s} (~{_rockworld_state_estimate(s, rock_percent)} states)"
+                      for s in boards)
+    print(f"warning: rockworld {sizes} should converge, but each repetition "
+          f"determinizes every model and runs H3's value iteration over "
+          f"size^2 x 2^{MAX_VALUABLE_ROCKS} states, so they are much slower "
+          f"than the other games — they are {hi - lo:.0f}% of the progress bar, "
+          f"from {lo:.0f}% to {hi:.0f}%.")
+
+
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
@@ -575,6 +629,8 @@ def main(argv=None):
             for s in args.sizes for h in args.humans]
     if "overcooked" in args.games:
         jobs += [("overcooked", None, h) for h in args.humans]
+
+    _warn_slow_rockworld(jobs, args.num_simu, args.rock_percent)
 
     time_rows, query_rows = [], []
     # One tqdm tick per repetition, so the bar reflects the real work: a
