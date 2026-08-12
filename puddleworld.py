@@ -64,8 +64,8 @@ class PuddleWorld(GridWorld):
         total_puddles = int(self.size * self.size * self.puddle_percent)
         protected = self.protected_cells()
         for _ in range(total_puddles):
-            x = np.random.randint(self.size)
-            y = np.random.randint(self.size)
+            x = self.rng.randint(self.size)
+            y = self.rng.randint(self.size)
             if self.map[x, y] == 0 and (x, y) not in protected:
                 self.map[x, y] = 0.5
 

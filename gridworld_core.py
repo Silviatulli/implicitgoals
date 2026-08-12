@@ -21,6 +21,29 @@ import numpy as np
 # Small helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def seeded_rng(obstacle_seed=None):
+    """(seed, generator) for one grid — the only randomness a world may use.
+
+    ``np.random.RandomState``, not ``np.random.default_rng``: RandomState is the
+    same MT19937 stream ``np.random.seed`` drove, so a given ``obstacle_seed``
+    still produces the map it produced when this generator was the global one.
+    Only the *sharing* changes, which is the whole point — a grid no longer
+    resets the process-wide numpy RNG, so callers downstream (experiment.py's
+    human draw, the random-order query baseline) keep the seed they were given.
+
+    ``obstacle_seed=None`` draws one from the global RNG.  Reading it is fine;
+    it is writing to it that this function exists to stop.
+
+    Subclasses that need randomness *before* ``GridWorld.__init__`` runs — see
+    TaxiWorld, whose passenger is placed first — call this themselves and pass
+    the seed down; ``GridWorld.__init__`` then adopts the generator instead of
+    building a second, differently-seeded one.
+    """
+    if obstacle_seed is None:
+        obstacle_seed = np.random.randint(0, 10000)
+    return obstacle_seed, np.random.RandomState(obstacle_seed)
+
+
 def _bfs_reachable(start_state, goal_test, successor_generator):
     """Breadth-first search; returns the action path to a goal, or None."""
     fringe = Queue()
@@ -50,9 +73,11 @@ class GridWorld:
     own slots: RockWorld carries a collected-rocks tuple, TaxiWorld a
     passenger/delivered pair.
 
-    Randomness is controlled by ``obstacle_seed`` (feeds ``np.random.seed``), so
-    two calls with the same seed give the same map. ``obstacles_percent`` sets
-    the obstacle density; ``divide_rooms=True`` gives a four-rooms layout.
+    Randomness is controlled by ``obstacle_seed``, which seeds this grid's own
+    ``self.rng`` (see :func:`seeded_rng`), so two calls with the same seed give
+    the same map and building a grid leaves the global numpy RNG alone.
+    ``obstacles_percent`` sets the obstacle density; ``divide_rooms=True`` gives
+    a four-rooms layout.
 
     Used directly by gridworld.py; subclassed by PuddleWorld, RockWorld, and
     TaxiWorld to add rewards/actions specific to each world.
@@ -73,7 +98,14 @@ class GridWorld:
         self.map = np.zeros((size, size))
         self.state_space = None
         self.discount = discount
-        self.obstacle_seed = obstacle_seed if obstacle_seed is not None else np.random.randint(0, 10000)
+        # One generator per grid, seeded once and never reset.  A subclass may
+        # have built it already (TaxiWorld places its passenger before calling
+        # up); adopting that one keeps a single stream per grid rather than two
+        # independently seeded halves.
+        if hasattr(self, "rng"):
+            self.obstacle_seed = obstacle_seed
+        else:
+            self.obstacle_seed, self.rng = seeded_rng(obstacle_seed)
 
         valid_config_found = False
         curr_tries = 0
@@ -113,14 +145,24 @@ class GridWorld:
         return {self.start_pos, self.goal_pos}
 
     def place_random_obstacles(self):
+        """Scatter obstacles on free, unprotected cells.
+
+        Draws from ``self.rng``, which is seeded once in ``__init__`` and never
+        reset here.  It used to call ``np.random.seed(self.obstacle_seed)`` on
+        every entry, which had two costs: it clobbered the process-wide numpy
+        RNG (so every caller downstream inherited this grid's obstacle seed),
+        and — since this runs inside ``__init__``'s retry loop — it rewound the
+        stream to the same point on each retry, redrawing the identical
+        unsolvable layout ``max_tries`` times before giving up on the empty-map
+        fallback.  With a persistent generator a retry actually retries.
+        """
         self.state_space = None
-        np.random.seed(self.obstacle_seed)
         total_obstacles = int(self.size * self.size * self.obstacles_percent)
         protected = self.protected_cells()
         obstacles_placed = 0
         while obstacles_placed < total_obstacles:
-            x = np.random.randint(self.size)
-            y = np.random.randint(self.size)
+            x = self.rng.randint(self.size)
+            y = self.rng.randint(self.size)
             if (x, y) not in protected and self.map[x, y] != -1:
                 self.map[x, y] = -1
                 obstacles_placed += 1
@@ -131,13 +173,13 @@ class GridWorld:
         room_divider = self.size // 2
         self.map[room_divider, :] = -1
         self.map[:, room_divider] = -1
-        x1 = np.random.randint(room_divider)
+        x1 = self.rng.randint(room_divider)
         self.map[x1, room_divider] = 0
-        x2 = np.random.randint(room_divider + 1, self.size)
+        x2 = self.rng.randint(room_divider + 1, self.size)
         self.map[x2, room_divider] = 0
-        y1 = np.random.randint(room_divider)
+        y1 = self.rng.randint(room_divider)
         self.map[room_divider, y1] = 0
-        y2 = np.random.randint(room_divider + 1, self.size)
+        y2 = self.rng.randint(room_divider + 1, self.size)
         self.map[room_divider, y2] = 0
         # The dividers are drawn blind, so they can bury the start or the goal.
         # Reopen those cells: same invariant place_random_obstacles keeps.
@@ -147,9 +189,9 @@ class GridWorld:
 
     def place_start_and_goal(self):
         if self.start_pos is None:
-            self.start_pos = (np.random.randint(self.size), np.random.randint(self.size))
+            self.start_pos = (self.rng.randint(self.size), self.rng.randint(self.size))
         if self.goal_pos is None:
-            self.goal_pos = (np.random.randint(self.size), np.random.randint(self.size))
+            self.goal_pos = (self.rng.randint(self.size), self.rng.randint(self.size))
 
     # ── Connectivity ─────────────────────────────────────────────────────────
     def get_all_neighbors(self, state):

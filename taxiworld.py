@@ -40,7 +40,7 @@ import random
 
 import numpy as np
 
-from gridworld_core import GridWorld, augment_mdp_to_deterministic
+from gridworld_core import GridWorld, augment_mdp_to_deterministic, seeded_rng
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,6 +58,9 @@ class TaxiWorld(GridWorld):
                  obstacles_percent=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
                  obstacle_seed=1, wrong_dropoff_penalty=-10):
         self.size = size  # needed before place_random_location
+        # This world draws *before* GridWorld.__init__ runs, so it builds the
+        # generator and GridWorld adopts it rather than seeding a second one.
+        obstacle_seed, self.rng = seeded_rng(obstacle_seed)
         self.passenger_loc = passenger_loc if passenger_loc is not None else self.place_random_location()
         self.wrong_dropoff_penalty = wrong_dropoff_penalty
         super().__init__(size=size, start=start, goal=destination,
@@ -74,7 +77,7 @@ class TaxiWorld(GridWorld):
 
     def place_random_location(self):
         while True:
-            x, y = np.random.randint(self.size), np.random.randint(self.size)
+            x, y = self.rng.randint(self.size), self.rng.randint(self.size)
             if not hasattr(self, 'map') or self.map[x, y] != -1:
                 return (x, y)
 
@@ -108,7 +111,7 @@ class TaxiWorld(GridWorld):
         if self.passenger_loc in reachable:
             return
         candidates = sorted(reachable - {self.destination})
-        self.passenger_loc = (candidates[np.random.randint(len(candidates))]
+        self.passenger_loc = (candidates[self.rng.randint(len(candidates))]
                               if candidates else self.destination)
 
     def get_actions(self):

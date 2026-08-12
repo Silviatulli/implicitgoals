@@ -10,16 +10,17 @@ Each (game, size, humans) combination is repeated --num-simu times, and every
 repetition rebuilds the instance from scratch — a fresh random map for the four
 grid games — so every number reported is a mean over those repetitions.
 
-Nine conditions per repetition: the four selection rules (VI, H1 Info Gain,
-H3 Goal Proximity, H4 Query Frequency), each run alone and again wearing the H2
-dominance mask, plus the random-order "query all" control.
+Five conditions per repetition: the four selection rules (VI, H1 Info Gain,
+H3 Goal Proximity, H4 Query Frequency), plus the random-order "query all"
+control.  --h2 adds a second run of each rule wearing the H2 dominance mask,
+for nine conditions; without the flag the mask is never built.
 
 Writes two files into results/ , one row per combination:
     compute_times.csv   mean wall-clock time of every pipeline stage
     query_counts.csv    mean query count, one column per condition
 
 and two plots rendered from those same CSVs:
-    query_counts.png    one subplot per configuration, nine bars each
+    query_counts.png    one subplot per configuration, one bar per condition
     compute_times.png   n_reachable, |I|, |B_filter| and wall-clock time
 
 All defaults (num_simu, sizes, humans, ...) live in parse_args() below.
@@ -93,9 +94,22 @@ from bottlenecks import (
 # chooses a query, it only widens K_not after a NO.  It is applied at inference
 # (evaluate_policy_on_real_human(dominance=...)), so the paired columns share one
 # policy object and differ only in whether the mask is passed.
+#
+# The H2 columns are opt-in (--h2): off, a run has five columns — Random and the
+# four rules alone — and never builds the dominance mask at all.  Everything
+# downstream (CSV fields, plots, summary) is derived from the condition list the
+# run actually used, so the two shapes stay consistent with each other.
 BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
-CONDITIONS = ("query_all",) + tuple(
-    c for b in BASES for c in (b, f"{b}_h2"))
+
+
+def conditions_for(use_h2):
+    """Column order for one run: Random, then each rule, each immediately
+    followed by its "+ H2" twin when the dominance layer is switched on."""
+    return ("query_all",) + tuple(
+        c for b in BASES for c in ((b, f"{b}_h2") if use_h2 else (b,)))
+
+
+CONDITIONS = conditions_for(True)    # every column the pipeline can produce
 
 BASE_LABELS = {
     "strategic_exact": "VI baseline",
@@ -218,7 +232,8 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
-                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=18):
+                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=18,
+                 use_h2=False):
     # mdp_R feeds Hypothesis 3's value iteration:
     #   * a robot MDP object (grid games) → reward-driven V_R;
     #   * None (Overcooked, which has no MDP object) → the stochastic matrix is
@@ -266,8 +281,13 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         Called *inside* the Proximity timer, because Hypothesis 3's cost includes
         the value iteration it depends on.  None means H3 is skipped (NaN).
 
+    use_h2 : bool
+        Add the "+ H2" twin of every selection rule.  Off by default: the
+        dominance mask is not even built, and neither `t_dominance` nor any
+        `*_h2` column appears in the returned row or counts.
+
     Returns (row, counts, success): `row` holds the problem sizes and per-stage
-    times, `counts` maps each of CONDITIONS to the queries that condition needed
+    times, `counts` maps each of the run's conditions to the queries that condition needed
     on one episode, and `success` says whether the episode identified the human
     at all.  Every count is NaN when the Query MDP was skipped — every return
     path has this same arity, so main() can unpack it unconditionally.
@@ -280,6 +300,13 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
 
     One call is one repetition — main() averages over num_simu of them.
     """
+    # The columns this repetition produces, and the stage timers an early return
+    # has to NaN out — both narrower when H2 is off.
+    conditions = conditions_for(use_h2)
+    unrun_stages = (["t_dominance"] if use_h2 else []) + \
+        [f"t_solve_{c}" for c in conditions if c != "query_all"] + \
+        [f"t_sim_{c}" for c in conditions]
+
     # n_reachable is filled in by the Proximity stage below — it is the side of
     # the matrix H3's value iteration actually runs on.  Seeded NaN here so every
     # early return carries the column without repeating the assignment.
@@ -328,10 +355,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                     "n_I": float("nan"), "n_columns": float("nan")})
         # t_bottlenecks and t_oracle_sets already ran and hold real values —
         # only the stages that never got a chance to run are NaN'd here.
-        for stage in ["t_algorithm1", "t_dominance"] + SOLVE_TIMES + SIM_TIMES:
+        for stage in ["t_algorithm1"] + unrun_stages:
             row[stage] = float("nan")
         row["skipped"] = f"{len(B_filter)} bottlenecks > {max_bottlenecks}"
-        return row, {c: float("nan") for c in CONDITIONS}, float("nan")
+        return row, {c: float("nan") for c in conditions}, float("nan")
 
     t0 = time.perf_counter()
     with _quiet():
@@ -353,10 +380,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     # ── Query MDP ────────────────────────────────────────────────────────────
     n = len(B_filter)
     if n == 0:
-        for stage in ["t_dominance"] + SOLVE_TIMES + SIM_TIMES:
+        for stage in unrun_stages:
             row[stage] = float("nan")
         row["skipped"] = "no bottlenecks"
-        return row, {c: float("nan") for c in CONDITIONS}, float("nan")
+        return row, {c: float("nan") for c in conditions}, float("nan")
 
     # Empirical P(YES | b) = fraction of candidate humans owning b, taken from the
     # very ensemble the evaluated human is drawn from below.  Without it the
@@ -421,23 +448,27 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     # against n_states, which is how big the game's state space is on paper.
     row["n_reachable"] = int(T_R_sto.shape[0])
 
-    # H2's mask — computed once, charged to each column that wears it.
-    t0 = time.perf_counter()
-    with _quiet():
-        dominance = build_dominance(I, B_filter)
-    t_dominance = time.perf_counter() - t0
-    row["t_dominance"] = t_dominance
+    # H2's mask — computed once, charged to each column that wears it.  Not built
+    # at all when no column wears it.
+    dominance, t_dominance = None, float("nan")
+    if use_h2:
+        t0 = time.perf_counter()
+        with _quiet():
+            dominance = build_dominance(I, B_filter)
+        t_dominance = time.perf_counter() - t0
+        row["t_dominance"] = t_dominance
 
     for base in BASES:
-        row[f"t_solve_{base}"]      = base_solve[base]
-        row[f"t_solve_{base}_h2"]   = base_solve[base] + t_dominance
+        row[f"t_solve_{base}"] = base_solve[base]
+        if use_h2:
+            row[f"t_solve_{base}_h2"] = base_solve[base] + t_dominance
 
     # The same human faces every condition within a repetition, so the counts are
     # paired: their differences are not polluted by which human was drawn.
     oracle_bottlenecks = list(oracle_sets[np.random.randint(len(oracle_sets))])
 
     counts, success = {}, float("nan")
-    for name in CONDITIONS:
+    for name in conditions:
         base = name[:-3] if name.endswith("_h2") else name
         if base != "query_all" and policies[base] is None:
             counts[name] = float("nan")
@@ -487,28 +518,43 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None
 # The t_solve_* columns are per-condition standalone costs, so shared work is
 # added into each of them; t_dominance is that shared piece reported once, on its
 # own, and is therefore *not* a term you may add to a total — summing the
-# t_solve_* columns already counts it four times, deliberately.
-SOLVE_TIMES = [f"t_solve_{c}" for c in CONDITIONS if c != "query_all"]
-SIM_TIMES   = [f"t_sim_{c}"   for c in CONDITIONS]
-
-STAGE_TIMES = (["t_build", "t_bottlenecks", "t_toboggan_filter", "t_algorithm1",
-                "t_oracle_sets", "t_dominance"] + SOLVE_TIMES + SIM_TIMES
-               + ["t_total"])
+# t_solve_* columns already counts it four times, deliberately.  It is a column
+# only when H2 runs; without it there is no shared piece to report.
 STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans",
                "n_B", "n_B_filter", "n_I", "n_columns"]
 
-TIME_FIELDS = (["game", "size", "num_humans", "num_simu"] + STAGE_SIZES
-               + STAGE_TIMES + ["t_total_std", "n_skipped", "skipped"])
 
-# n_success + n_failure == n_episodes.  An episode "fails" when the drawn human
-# is not representable in I, in which case its query count measures queries until
-# the contradiction was proved, not queries until the human was identified — the
-# two are not commensurable, hence the split means alongside the pooled ones.
-QUERY_FIELDS = (["game", "size", "num_humans", "num_simu", "n_episodes",
-                 "n_success", "n_failure"]
-                + [f"{c}_{stat}" for c in CONDITIONS
-                   for stat in ("mean", "std", "mean_success", "mean_failure")]
-                + ["saved_queries", "skipped"])
+def column_layout(use_h2):
+    """The CSV header of a run, derived from the conditions it will produce.
+
+    Returns (conditions, stage_times, time_fields, query_fields).  Keeping the
+    four in one place is what keeps the H2-off run from writing empty `*_h2`
+    columns nothing filled in.
+
+    n_success + n_failure == n_episodes.  An episode "fails" when the drawn human
+    is not representable in I, in which case its query count measures queries
+    until the contradiction was proved, not queries until the human was
+    identified — the two are not commensurable, hence the split means alongside
+    the pooled ones.
+    """
+    conditions  = conditions_for(use_h2)
+    solve_times = [f"t_solve_{c}" for c in conditions if c != "query_all"]
+    sim_times   = [f"t_sim_{c}"   for c in conditions]
+
+    stage_times = (["t_build", "t_bottlenecks", "t_toboggan_filter",
+                    "t_algorithm1", "t_oracle_sets"]
+                   + (["t_dominance"] if use_h2 else [])
+                   + solve_times + sim_times + ["t_total"])
+
+    time_fields = (["game", "size", "num_humans", "num_simu"] + STAGE_SIZES
+                   + stage_times + ["t_total_std", "n_skipped", "skipped"])
+
+    query_fields = (["game", "size", "num_humans", "num_simu", "n_episodes",
+                     "n_success", "n_failure"]
+                    + [f"{c}_{stat}" for c in conditions
+                       for stat in ("mean", "std", "mean_success", "mean_failure")]
+                    + ["saved_queries", "skipped"])
+    return conditions, stage_times, time_fields, query_fields
 
 
 def parse_args(argv=None):
@@ -561,6 +607,11 @@ def parse_args(argv=None):
                         "matches PuddleWorld's own default)")
     p.add_argument("--rock-percent", type=float, default=0.3,
                    help="rock density, rockworld only (default: 0.3)")
+    p.add_argument("--h2", action="store_true",
+                   help="also run every selection rule wearing the H2 dominance "
+                        "mask, doubling the four rule columns to eight (default: "
+                        "off — the mask is not built and only the rules alone, "
+                        "plus Random, are reported)")
     p.add_argument("--divide-rooms", action="store_true",
                    help="use the four-rooms layout, gridworld only")
     p.add_argument("--overcooked-allow-drop", action="store_true",
@@ -622,6 +673,7 @@ def _warn_slow_rockworld(jobs, num_simu, rock_percent):
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
+    conditions, stage_times, time_fields, query_fields = column_layout(args.h2)
 
     # Overcooked has no grid size, so it gets one job per human count; the four
     # grid domains get the full (size x humans) cross product.
@@ -664,7 +716,7 @@ def main(argv=None):
             row, counts, success = run_instance(
                 *instance, max_exact_n=args.max_exact_n,
                 filter_toboggans=(game == "overcooked"),
-                max_bottlenecks=args.max_bottlenecks)
+                max_bottlenecks=args.max_bottlenecks, use_h2=args.h2)
             row["t_build"] = t_build
             row["t_total"] = time.perf_counter() - t_start
 
@@ -675,22 +727,24 @@ def main(argv=None):
 
         key = {"game": game, "size": "" if size is None else size,
                "num_humans": num_humans, "num_simu": args.num_simu}
-        time_rows.append(_aggregate_times(key, reps))
-        query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes))
+        time_rows.append(_aggregate_times(key, reps, stage_times))
+        query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes,
+                                             conditions))
     bar.close()
 
     times_path   = os.path.join(args.out_dir, "compute_times.csv")
     queries_path = os.path.join(args.out_dir, "query_counts.csv")
-    _write_csv(times_path, TIME_FIELDS, time_rows)
-    _write_csv(queries_path, QUERY_FIELDS, query_rows)
-    query_plot_path, times_plot_path = _make_plots(times_path, queries_path, args.out_dir)
+    _write_csv(times_path, time_fields, time_rows)
+    _write_csv(queries_path, query_fields, query_rows)
+    query_plot_path, times_plot_path = _make_plots(times_path, queries_path,
+                                                   args.out_dir, conditions)
 
     print(f"\n{len(time_rows)} configurations x {args.num_simu} repetitions")
     print(f"  mean stage times   -> {times_path}")
     print(f"  mean query counts  -> {queries_path}")
     print(f"  query counts plot  -> {query_plot_path}")
     print(f"  compute times plot -> {times_plot_path}")
-    _print_summary(time_rows, query_rows)
+    _print_summary(time_rows, query_rows, conditions)
 
 
 def _nanmean(values):
@@ -706,10 +760,10 @@ def _nanstd(values):
     return float(arr.std()) if arr.size else float("nan")
 
 
-def _aggregate_times(key, reps):
+def _aggregate_times(key, reps, stage_times):
     """Average every stage time and problem size over the repetitions."""
     row = dict(key)
-    for field in STAGE_SIZES + STAGE_TIMES:
+    for field in STAGE_SIZES + stage_times:
         row[field] = _nanmean([r.get(field, float("nan")) for r in reps])
     row["t_total_std"] = _nanstd([r["t_total"] for r in reps])
     skips = [r["skipped"] for r in reps if r.get("skipped")]
@@ -728,7 +782,7 @@ def _mean_where(values, successes, want):
     return float(np.mean(sel)) if sel else float("nan")
 
 
-def _aggregate_queries(key, reps, counts_per_rep, successes):
+def _aggregate_queries(key, reps, counts_per_rep, successes, conditions):
     """Average every condition's query counts over the repetitions.
 
     Reported three ways: pooled over every completed episode, and split by
@@ -741,7 +795,7 @@ def _aggregate_queries(key, reps, counts_per_rep, successes):
     `counts_per_rep` is a list of {condition: count} dicts, one per repetition.
     """
     row = dict(key)
-    by_cond = {c: [d.get(c, float("nan")) for d in counts_per_rep] for c in CONDITIONS}
+    by_cond = {c: [d.get(c, float("nan")) for d in counts_per_rep] for c in conditions}
 
     exact_counts = by_cond["strategic_exact"]
     # Counted on query_all, not on the VI baseline: --max-exact-n can skip VI on
@@ -787,14 +841,15 @@ def _rotate_xticks(ax, labels, x):
     ax.set_xticklabels(labels, fontsize=8, rotation=45, ha="right")
 
 
-def _make_plots(times_path, queries_path, out_dir):
+def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     """Read compute_times.csv / query_counts.csv back and render two PNGs
     into out_dir: one bar per (game, size, num_humans) combination in both.
 
     query_counts.png   one subplot per configuration — a (size, humans) pair for
                         the grid games, and one for Overcooked, which has no grid
-                        size.  Nine bars each: the four selection rules with and
-                        without H2, plus Random.  Per-config subplots rather than
+                        size.  One bar per condition: the four selection rules,
+                        each doubled when `conditions` carries its "+ H2" twin,
+                        plus Random.  Per-config subplots rather than
                         one shared axis because the configurations differ by an
                         order of magnitude in |B_filter|, and a shared y-axis
                         flattens the small ones into indistinguishable stubs.
@@ -808,6 +863,7 @@ def _make_plots(times_path, queries_path, out_dir):
     """
     df_q = pd.read_csv(queries_path)
     df_t = pd.read_csv(times_path)
+    with_h2 = any(c.endswith("_h2") for c in conditions)
 
     # ── query_counts.png — one subplot per configuration ────────────────────
     # A configuration is a (size, num_humans) pair; Overcooked has no size and
@@ -843,9 +899,9 @@ def _make_plots(times_path, queries_path, out_dir):
 
         games = list(sub["game"])
         x = np.arange(len(games))
-        width = 0.85 / len(CONDITIONS)
-        for i, cond in enumerate(CONDITIONS):
-            offset = (i - (len(CONDITIONS) - 1) / 2) * width
+        width = 0.85 / len(conditions)
+        for i, cond in enumerate(conditions):
+            offset = (i - (len(conditions) - 1) / 2) * width
             ax.bar(x + offset, sub[f"{cond}_mean"], width,
                    yerr=sub[f"{cond}_std"], capsize=2,
                    color=CONDITION_COLORS[cond],
@@ -858,23 +914,28 @@ def _make_plots(times_path, queries_path, out_dir):
         ax.axis("off")
 
     # One shared legend — nine entries repeated per subplot would eat the axes.
-    # Each rule gets ONE entry whose swatch is its light|dark pair, so the legend
-    # has five entries instead of nine and the shade convention is shown rather
-    # than spelled out four times.  Nine flat entries also laid out badly: a
-    # legend fills column-major, so "VI + H2" ended up stacked above "H1".
+    # With H2 on, each rule gets ONE entry whose swatch is its light|dark pair, so
+    # the legend has five entries instead of nine and the shade convention is
+    # shown rather than spelled out four times.  Nine flat entries also laid out
+    # badly: a legend fills column-major, so "VI + H2" ended up stacked above
+    # "H1".  With H2 off the same five entries carry a single swatch each.
     pair_handles = [Patch(facecolor=CONDITION_COLORS["query_all"])]
     pair_labels  = [CONDITION_LABELS["query_all"]]
     for b in BASES:
-        pair_handles.append((Patch(facecolor=CONDITION_COLORS[b]),
-                             Patch(facecolor=CONDITION_COLORS[f"{b}_h2"])))
+        shades = (Patch(facecolor=CONDITION_COLORS[b]),)
+        if with_h2:
+            shades += (Patch(facecolor=CONDITION_COLORS[f"{b}_h2"]),)
+        pair_handles.append(shades)
         pair_labels.append(BASE_LABELS[b])
     fig.legend(pair_handles, pair_labels, loc="lower center",
                ncol=len(pair_labels), fontsize=10, frameon=False,
                handler_map={tuple: HandlerTuple(ndivide=None, pad=0.0)},
                handlelength=3.0, handletextpad=0.6, columnspacing=2.4,
-               title="left bar = rule alone   ·   right bar = rule + H2",
+               title=("left bar = rule alone   ·   right bar = rule + H2"
+                      if with_h2 else "one bar per selection rule"),
                title_fontsize=9)
-    fig.suptitle("Query conditions — four selection rules, with and without H2",
+    fig.suptitle("Query conditions — four selection rules"
+                 + (", with and without H2" if with_h2 else ""),
                  fontsize=12)
     fig.tight_layout(rect=[0, 0.09, 1, 0.97])
     query_plot_path = os.path.join(out_dir, "query_counts.png")
@@ -921,18 +982,18 @@ def _make_plots(times_path, queries_path, out_dir):
     return query_plot_path, times_plot_path
 
 
-def _print_summary(time_rows, query_rows):
+def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
     """One line per configuration — everything shown is a mean over num_simu."""
     short = {"query_all": "rand", "strategic_exact": "VI", "info_gain": "H1",
              "proximity": "H3", "frequency": "H4"}
     short.update({f"{b}_h2": f"{short[b]}+2" for b in BASES})
-    header = "".join(f"{short[c]:>8}" for c in CONDITIONS)
+    header = "".join(f"{short[c]:>8}" for c in conditions)
     print(f"\n{'game':<12}{'size':>5}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):
         if q["n_episodes"]:
-            queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in CONDITIONS)
+            queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in conditions)
         else:
-            queries = f"{row['skipped']:>{8 * len(CONDITIONS)}}"
+            queries = f"{row['skipped']:>{8 * len(conditions)}}"
         print(f"{row['game']:<12}{str(row['size']):>5}{row['num_humans']:>5}"
               f"{row['n_B_filter']:>7.1f}{queries}{row['t_total']:>10.2f}")
 

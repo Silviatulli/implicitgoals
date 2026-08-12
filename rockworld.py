@@ -142,7 +142,7 @@ class RockWorld(GridWorld):
                 and (x, y) != self.start_pos and (x, y) != self.goal_pos]
         if not free:
             return None
-        x, y = free[np.random.randint(len(free))]
+        x, y = free[self.rng.randint(len(free))]
         self.map[x, y] = rock_type
         return (x, y)
 

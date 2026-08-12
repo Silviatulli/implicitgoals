@@ -14,7 +14,8 @@ Two-stage split:
 Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI),
 plus H1 Info Gain, H3 Goal Proximity and H4 Query Frequency — each run twice,
 once alone and once wearing the H2 dominance mask. Nine columns with the
-random-order control.
+random-order control. The H2 half is now optional and off unless `--h2` is
+passed — see the remark on H2(ii) below for why.
 
 Next step: more game variants, to grow `|I|` (the hypothesis space) beyond the
 small/easy sizes we get today.
@@ -129,7 +130,8 @@ and `results/query_counts.png`.
   Random, plus each of VI / H1 Info Gain / H3 Goal Proximity / H4 Query
   Frequency run with and without the H2 dominance mask. H2 has no column of
   its own because it is not a selection rule — it is applied at inference via
-  `evaluate_policy_on_real_human(dominance=...)`.
+  `evaluate_policy_on_real_human(dominance=...)`. The four "+ H2" columns are
+  now behind `--h2` and off by default — see the remark on H2(ii) below.
 
 - **Add more variants of the games.** (only modify layer 1)
 
@@ -137,10 +139,91 @@ and `results/query_counts.png`.
   bottleneck subsets) so the query policies are tested on harder, more
   interesting instances than the current small-`|I|` ones.
 
-- **Stop the grid generator from reseeding the global numpy RNG.** (only modify layer 1)
+- ~~**Stop the grid generator from reseeding the global numpy RNG.** (only modify layer 1)~~ — **DONE**
 
-  `GridWorld.place_random_obstacles` calls `np.random.seed()`, so building a grid
+  ~~`GridWorld.place_random_obstacles` calls `np.random.seed()`, so building a grid
   resets the process-wide numpy generator — once per robot and per human. The
   `np.random.seed(seed)` in `generate_determinized_models` is therefore dead, and
   `experiment.py`'s human draw depends on the last human's obstacle seed instead
-  of the repetition seed. Fix: give `GridWorld` its own `np.random.Generator`.
+  of the repetition seed. Fix: give `GridWorld` its own `np.random.Generator`.~~
+
+  `GridWorld` now owns a `self.rng` built by `gridworld_core.seeded_rng()`, and
+  every draw in the four grid games goes through it. It is a
+  `np.random.RandomState`, not a `default_rng`: RandomState is the same MT19937
+  stream `np.random.seed` drove, so every map is byte-identical to the ones the
+  old code produced for the same `obstacle_seed` — the only thing that changed is
+  who else can see the stream. The `np.random.seed(seed)` in each
+  `generate_determinized_models` is live again, and `experiment.py`'s human draw
+  now follows the repetition seed.
+
+  One bug fell out of it. `place_random_obstacles` ran *inside* `__init__`'s
+  retry loop and reseeded on every entry, so a layout that failed
+  `check_for_path` was redrawn identically `max_tries` times before the
+  empty-map fallback. A retry now actually retries.
+
+
+## Remark — the H2(ii) dominance mask may not be sound
+
+Flagged to Silvia, waiting on her answer. **`dominance` is off by default in
+`main` until then.** Nothing is deleted; `build_dominance` and the
+`evaluate_policy_on_real_human(dominance=...)` path still work, and the nine
+columns still run if you switch it back on.
+
+### What the mask does
+
+`build_dominance` marks a pair `(b1, b2)` when every subset in `I` that
+contains `b1` also contains `b2`. At inference, if the oracle answers *no* on
+`b2`, we rule out `b1` too, without spending a query.
+
+### Why that needs `I_G ∈ I`
+
+The argument is: the rule holds for every `I_k` in `I`, so it holds for the
+human's true subgoal set `I_G`, so we can contrapose. That last step only
+works if `I_G` is itself one of the subsets in `I`.
+
+But it isn't guaranteed. `I` comes from **the robot**: Algorithm 1 enumerates
+what `T_R` can achieve, and keeps only the *maximal* ones. `I_G` comes from
+**the human**: it's the bottleneck set of one of the `T_H_list` matrices.
+Nothing in the pipeline makes these two agree. `I_G` may not be achievable by
+the robot at all, and even when it is, there's no reason for it to be maximal —
+so in general we only get `I_G ⊆ I_k` for some `I_k`, not `I_G ∈ I`.
+
+### What goes wrong
+
+```
+B        = {1, 2, 3}
+I        = {{1,2}, {2,3}}     # robot can't do 1 and 3 in one plan
+I_G      = {1}                # achievable, but not maximal -> I_G not in I
+
+supp(1) = {{1,2}} ⊆ supp(2) = both   =>  mask marks (1, 2)
+
+query 2  -> oracle says "no"
+mask     -> rules out 1
+           but 1 IS in I_G, and it was never queried.
+```
+
+The robot then commits to a plan that skips the human's only subgoal, and
+never asks the one question that would have caught it.
+
+### It probably isn't only H2
+
+The consistency filter has the same requirement: dropping every `I_k` that
+contains a denied bottleneck is only justified if the `I_k` are candidates for
+`I_G` *exactly*. On the example above, answering *no* on `2` drops both
+subsets and leaves the consistent set empty — even though `{1,2}` was a
+perfectly good plan the whole time.
+
+Worth noting that our termination test is already the other way round:
+`evaluate_policy_on_real_human` stops on `I_hat ⊆ I_k`, i.e. *covering* `I_G`,
+not *identifying* it. Covering is the weaker, safer condition and doesn't need
+`I_G ∈ I`. So the codebase currently mixes the two readings — inclusion at
+termination, equality in the filter and in the mask.
+
+### Cheap check
+
+Compute `I`, then test whether each per-human bottleneck set from
+`compute_bottlenecks_per_matrix` is in `I`. If they all are, the assumption
+holds for our configs and should be written down as a precondition. If some
+aren't, we have a real counterexample from the actual experiments. If `|I|` is
+much smaller than the number of humans, the robot is capable enough to merge
+them and the hypothesis space has collapsed.
