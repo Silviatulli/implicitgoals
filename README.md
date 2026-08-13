@@ -1,7 +1,23 @@
 # About this branch
 
-I'm trying to write a unified version of the codebase — redundant files and dead code deleted,
-only what the experiments actually use remains.
+`yacine_game_variants` is `yacine_overcooked` plus one thing: **walls**. Every
+grid game is now built on a grid of rooms joined by one-way doors, instead of an
+open board. Everything else — the pipeline, the five games, the four selection
+rules — comes from `yacine_overcooked` unchanged, and the branch is strictly
+ahead of it (one commit, nothing diverged).
+
+The reason is `|I|`, the size of the hypothesis space. On an open board a single
+trajectory can tour every bottleneck and come back, so Algorithm 1 always returns
+exactly one maximally achievable subset: `|I| = 1` on 40 seeds out of 40,
+whatever the obstacle layout. With one hypothesis there is nothing to ask about,
+and every selection rule is being compared on a problem with no questions in it.
+One-way doors make the room grid a DAG — going through a door commits, and the
+routes not taken become unreachable — so several subsets can be maximal at once.
+See the *Add more variants of the games* item below for what that actually
+bought, measured.
+
+`yacine_overcooked` itself is the unified version of the codebase — redundant
+files and dead code deleted, only what the experiments actually use remains.
 
 Two-stage split:
 1. **Game modules** implement physics only, and output determinized
@@ -12,13 +28,15 @@ Two-stage split:
    (Not paralelized because some config demand a lot of ram)
 
 Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI),
-plus H1 Info Gain, H3 Goal Proximity and H4 Query Frequency — each run twice,
-once alone and once wearing the H2 dominance mask. Nine columns with the
-random-order control. The H2 half is now optional and off unless `--h2` is
-passed — see the remark on H2(ii) below for why.
+plus H1 Info Gain, H3 Goal Proximity and H4 Query Frequency — reported against
+the random-order control, so five columns. `--h2` runs each rule a second time
+wearing the H2 dominance mask, for nine; it is off by default — see the remark
+on H2(ii) below for why.
 
-Next step: more game variants, to grow `|I|` (the hypothesis space) beyond the
-small/easy sizes we get today.
+Next step: `|I|` is no longer stuck at 1, but the typical instance still sits at
+1 or 2 against the 6 the default geometry allows, because obstacles prune most
+of the monotone routes. Making routes survive the obstacles is the open problem,
+not adding more rooms.
 
 ## Architecture — how a request flows through the code
 
