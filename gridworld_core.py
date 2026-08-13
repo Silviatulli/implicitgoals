@@ -2,9 +2,8 @@
 gridworld_core.py — shared GridWorld MDP base + determinization helper.
 =========================================================================
 
-Factored out of gridworld.py / puddleworld.py / rockworld.py / taxiworld.py,
-which used to each carry a byte-for-byte copy of this code. This module holds
-the plain stochastic 2D grid (``GridWorld``), its BFS helper, and the
+Shared by gridworld.py / puddleworld.py / rockworld.py / taxiworld.py: the plain
+stochastic 2D grid (``GridWorld``), its BFS helper, and the
 stochastic-to-deterministic MDP conversion (``augment_mdp_to_deterministic``)
 that all four world types use identically.
 
@@ -24,24 +23,54 @@ import numpy as np
 def seeded_rng(obstacle_seed=None):
     """(seed, generator) for one grid — the only randomness a world may use.
 
-    ``np.random.RandomState``, not ``np.random.default_rng``: RandomState is the
-    same MT19937 stream ``np.random.seed`` drove, so a given ``obstacle_seed``
-    still produces the map it produced when this generator was the global one.
-    Only the *sharing* changes, which is the whole point — a grid no longer
-    resets the process-wide numpy RNG, so callers downstream (experiment.py's
-    human draw, the random-order query baseline) keep the seed they were given.
+    ``RandomState``, not ``default_rng``: it is the same MT19937 stream
+    ``np.random.seed`` drove, so a given ``obstacle_seed`` still produces the map
+    it always did.  Only the *sharing* changes, which is the point — a grid no
+    longer resets the process-wide numpy RNG, so callers downstream keep the seed
+    they were given.  ``obstacle_seed=None`` reads one from the global RNG;
+    reading it is fine, writing to it is what this exists to stop.
 
-    ``obstacle_seed=None`` draws one from the global RNG.  Reading it is fine;
-    it is writing to it that this function exists to stop.
-
-    Subclasses that need randomness *before* ``GridWorld.__init__`` runs — see
-    TaxiWorld, whose passenger is placed first — call this themselves and pass
-    the seed down; ``GridWorld.__init__`` then adopts the generator instead of
-    building a second, differently-seeded one.
+    Subclasses needing randomness *before* ``GridWorld.__init__`` (TaxiWorld's
+    passenger) call this themselves and pass the seed down; ``__init__`` then
+    adopts the generator rather than seeding a second one.
     """
     if obstacle_seed is None:
         obstacle_seed = np.random.randint(0, 10000)
     return obstacle_seed, np.random.RandomState(obstacle_seed)
+
+
+def board_side(rooms_per_side, room_side):
+    """Cells per side of the whole board.
+
+    Walls are thin — they run between two adjacent cells and consume none of
+    their own — so the board is exactly the product of the two room numbers.
+    (Thick walls would make it ``rooms_per_side * room_side + rooms_per_side - 1``.)
+
+    Deriving it, with no way to state a board size directly, is what removes the
+    need to check that a board splits into equal rooms.
+    """
+    return rooms_per_side * room_side
+
+
+def _room_midlines(rooms_per_side, room_side):
+    """The middle row of each room band, in order — where the doors go.
+
+    Everything is square, so the same indices serve the door rows of the vertical
+    walls and the door columns of the horizontal ones.
+    """
+    return [i * room_side + room_side // 2 for i in range(rooms_per_side)]
+
+
+def _room_boundaries(rooms_per_side, room_side):
+    """Indices ``b`` such that a wall runs between cell ``b`` and cell ``b + 1``.
+
+    One per pair of adjacent rooms, so ``rooms_per_side - 1`` of them.  A boundary
+    names a *gap*, not a cell — nothing on the board is consumed by it.
+
+    Same shape as :func:`_room_midlines`: the start of room ``i`` plus an offset,
+    here the last cell of the room rather than its middle.
+    """
+    return [i * room_side + room_side - 1 for i in range(rooms_per_side - 1)]
 
 
 def _bfs_reachable(start_state, goal_test, successor_generator):
@@ -67,41 +96,52 @@ def _bfs_reachable(start_state, goal_test, successor_generator):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GridWorld:
-    """2D grid MDP. Ported from ``GridWorldClass.py`` (visualization / value
-    iteration helpers dropped). A state is ``[(row, col)]`` — a one-element list,
-    so that ``state[0]`` is the position in every world.  Subclasses append their
-    own slots: RockWorld carries a collected-rocks tuple, TaxiWorld a
-    passenger/delivered pair.
+    """2D grid MDP.  A state is ``[(row, col)]`` — a one-element list, so that
+    ``state[0]`` is the position in every world.  Subclasses append their own
+    slots: RockWorld a collected-rocks tuple, TaxiWorld a passenger/delivered
+    pair.
 
-    Randomness is controlled by ``obstacle_seed``, which seeds this grid's own
-    ``self.rng`` (see :func:`seeded_rng`), so two calls with the same seed give
-    the same map and building a grid leaves the global numpy RNG alone.
-    ``obstacles_percent`` sets the obstacle density; ``divide_rooms=True`` gives
-    a four-rooms layout.
+    ``obstacle_seed`` seeds this grid's own ``self.rng`` (see :func:`seeded_rng`),
+    so two calls with the same seed give the same map and building a grid leaves
+    the global numpy RNG alone.
+
+    The board is described by exactly two numbers: ``rooms_per_side`` rooms along
+    each side of the board, each room ``room_side`` cells along each of its own
+    sides, so the board is their product.  ``rooms_per_side=1`` is the open board.
+    There is deliberately no way to state the board size directly, so no two
+    numbers can contradict each other.
 
     Used directly by gridworld.py; subclassed by PuddleWorld, RockWorld, and
     TaxiWorld to add rewards/actions specific to each world.
     """
 
-    def __init__(self, size=5, start=None, goal=None, obstacles_percent=0.1,
-                 divide_rooms=False, room_count=4,
+    def __init__(self, rooms_per_side=1, room_side=5, start=None, goal=None,
+                 obstacle_density=0.1,
                  slip_prob=0.1, discount=0.99, max_tries=100,
                  obstacle_seed=1):
-        self.size = size
+        # Every game reaches the board through here, so this is the one place the
+        # geometry is checked.  Unguarded, rooms_per_side=0 builds a 0x0 board in
+        # silence, and a float fails later inside numpy rather than here.
+        # np.integer is accepted: a number read out of an array is still an
+        # integer, but `isinstance(np.int64(3), int)` is False.
+        for name, value in (("rooms_per_side", rooms_per_side),
+                            ("room_side", room_side)):
+            if not isinstance(value, (int, np.integer)) or value < 1:
+                raise ValueError(f"{name} must be an integer >= 1, got {value!r}")
+        self.board_side = board_side(rooms_per_side, room_side)
+        self.rooms_per_side = rooms_per_side
+        self.room_side = room_side
         self.start_pos = start
         self.goal_pos = goal
-        self.obstacles_percent = obstacles_percent
-        self.divide_rooms = divide_rooms
-        self.room_count = room_count
+        self.obstacle_density = obstacle_density
         self.slip_prob = slip_prob
         self.reward_func = self.goal_reward_func
-        self.map = np.zeros((size, size))
+        self.map = np.zeros((self.board_side, self.board_side))
         self.state_space = None
         self.discount = discount
         # One generator per grid, seeded once and never reset.  A subclass may
-        # have built it already (TaxiWorld places its passenger before calling
-        # up); adopting that one keeps a single stream per grid rather than two
-        # independently seeded halves.
+        # have built it already (TaxiWorld draws its passenger before calling up);
+        # adopting that one keeps a single stream per grid, not two.
         if hasattr(self, "rng"):
             self.obstacle_seed = obstacle_seed
         else:
@@ -110,88 +150,148 @@ class GridWorld:
         valid_config_found = False
         curr_tries = 0
         while not valid_config_found and curr_tries < max_tries:
-            self.map = np.zeros((size, size))
-            # Start and goal *first*.  protected_cells() is what keeps obstacles
-            # off them, and it can only do that if they already exist — placed
-            # afterwards, as they used to be, protected_cells() saw {None} and
-            # the two cells were protected only when the caller happened to pass
-            # them explicitly.  When both are passed (every experiment path)
-            # this consumes no randomness, so generated maps are unchanged.
+            self._blank_board()
+            # Start and goal first: protected_cells() can only keep obstacles off
+            # them if they already exist.
             self.place_start_and_goal()
+            # Walls before obstacles: built afterwards they would bury obstacles
+            # already counted, quietly lowering the real density.  An obstacle may
+            # land beyond a door and block it — allowed, and how a route gets
+            # pruned.
+            if self.rooms_per_side > 1:
+                self.build_one_way_rooms()
             self.place_random_obstacles()
-            if self.divide_rooms:
-                self.divide_into_rooms()
+            # Reaching the goal is the only condition.  Traps — a room whose exits
+            # are all blocked — are deliberately allowed: Algorithm 1 already
+            # refuses to count a trapped waypoint as achievable.
             if self.check_for_path():
                 valid_config_found = True
             else:
                 curr_tries += 1
 
         if not valid_config_found:
-            self.map = np.zeros((size, size))
+            self._blank_board()
             self.place_start_and_goal()
+            # Keep the rooms: dropping them would hand back an open grid under a
+            # multi-room configuration.  With no obstacles every door is
+            # reachable, so this fallback always reaches the goal.
+            if self.rooms_per_side > 1:
+                self.build_one_way_rooms()
 
         self.create_state_space()
         assert slip_prob >= 0 and slip_prob * 3 <= 1, \
             "Slip probability should be >= 0 and 3*slip_prob <= 1."
 
     # ── Map construction ─────────────────────────────────────────────────────
+    def _blank_board(self):
+        """Empty map, no walls, no doors — the state every attempt starts from.
+
+        The retry loop and the give-up fallback both begin here, so they cannot
+        drift.  With a single room both collections stay empty, which is what
+        reduces every movement test to "is this cell an obstacle?".
+        """
+        self.map = np.zeros((self.board_side, self.board_side))
+        self.doors = {}
+        self.blocked_edges = set()
+
     def protected_cells(self):
         """Cells an obstacle must never cover. Subclasses widen this.
 
-        TaxiWorld adds the passenger: when one location is shared across the
-        robot and every human, burying it under one model's obstacles would
-        force that model to relocate and silently break the sharing.
+        Doors cannot be in here: a door is an edge, not a cell, so there is
+        nothing for an obstacle to land on.
+
+        TaxiWorld adds the passenger: its location is shared across the robot and
+        every human, so burying it under one model's obstacles would force that
+        model to relocate and silently break the sharing.
         """
         return {self.start_pos, self.goal_pos}
+
+    def build_one_way_rooms(self):
+        """Split the board into ``rooms_per_side`` x ``rooms_per_side`` equal square
+        rooms of ``room_side`` cells a side, and open exactly one **one-way**
+        door in every wall between two neighbouring rooms.
+
+        Walls are thin — they run *between* cells and take up none of the board —
+        so a wall is a set of forbidden *crossings*, not a row of cells.  You
+        never stand in a door; you stand west of it and one step right puts you in
+        the next room.
+
+        Every door faces east or south, so the room grid is a DAG from the start's
+        room (top-left) to the goal's (bottom-right).  That orientation is the
+        point: on a reversible board one trajectory can tour every bottleneck and
+        come back, so Algorithm 1 finds a single maximally achievable subset
+        however the walls fall.  Here a door *commits*, so the achievable subsets
+        are the monotone routes through the room grid — ``C(2(r-1), r-1)`` of them
+        for ``r`` rooms per side (6 for 3x3, 20 for 4x4).
+
+        Doors sit at the **middle** of their wall with no randomness, so the robot
+        and every human share them, as they already share the start, the goal and
+        TaxiWorld's passenger.  Only the obstacles differ, deliberately: B is the
+        *union* of the humans' bottleneck sets, so per-model doors made |B| grow
+        with the human count against an Algorithm 1 costing 2^|B_filter|.  Shared
+        doors make the humans disagree about which *route* is forced instead.
+        """
+        self.state_space = None            # stale once the layout changes
+        boundaries = _room_boundaries(self.rooms_per_side, self.room_side)
+        midlines = _room_midlines(self.rooms_per_side, self.room_side)
+
+        # Each wall is sealed down its whole length before its doors are punched,
+        # which is why the door lines are known up front rather than band by band.
+        for b in boundaries:
+            for row in range(self.board_side):
+                self.blocked_edges.add(((row, b + 1), (row, b)))      # westward: never
+                if row not in midlines:
+                    self.blocked_edges.add(((row, b), (row, b + 1)))  # eastward: only doors
+            for row in midlines:
+                self.doors[((row, b), (row, b + 1))] = "east"
+        for b in boundaries:
+            for col in range(self.board_side):
+                self.blocked_edges.add(((b + 1, col), (b, col)))      # northward: never
+                if col not in midlines:
+                    self.blocked_edges.add(((b, col), (b + 1, col)))  # southward: only doors
+            for col in midlines:
+                self.doors[((b, col), (b + 1, col))] = "south"
+        # Nothing to reopen afterwards: thin walls never overwrite a cell, so the
+        # start and the goal survive the layout untouched.
+
+    def _edge_free(self, frm, to):
+        """True when a single step ``frm`` -> ``to`` is permitted.
+
+        The one predicate every part of this class asks about movement: bounds,
+        obstacles, and the directed door edges.  With a single room
+        ``blocked_edges`` is empty and this is a plain bounds-and-obstacles test.
+        """
+        x, y = to
+        if not (0 <= x < self.board_side and 0 <= y < self.board_side):
+            return False
+        if self.map[x, y] == -1:
+            return False
+        return (frm, to) not in self.blocked_edges
 
     def place_random_obstacles(self):
         """Scatter obstacles on free, unprotected cells.
 
-        Draws from ``self.rng``, which is seeded once in ``__init__`` and never
-        reset here.  It used to call ``np.random.seed(self.obstacle_seed)`` on
-        every entry, which had two costs: it clobbered the process-wide numpy
-        RNG (so every caller downstream inherited this grid's obstacle seed),
-        and — since this runs inside ``__init__``'s retry loop — it rewound the
-        stream to the same point on each retry, redrawing the identical
-        unsolvable layout ``max_tries`` times before giving up on the empty-map
-        fallback.  With a persistent generator a retry actually retries.
+        Draws from ``self.rng``, seeded once in ``__init__`` and never reset
+        here.  Reseeding on entry would both clobber the process-wide numpy RNG
+        and, since this runs inside the retry loop, rewind the stream so every
+        retry redrew the identical unsolvable layout.
         """
         self.state_space = None
-        total_obstacles = int(self.size * self.size * self.obstacles_percent)
+        total_obstacles = int(self.board_side * self.board_side * self.obstacle_density)
         protected = self.protected_cells()
         obstacles_placed = 0
         while obstacles_placed < total_obstacles:
-            x = self.rng.randint(self.size)
-            y = self.rng.randint(self.size)
+            x = self.rng.randint(self.board_side)
+            y = self.rng.randint(self.board_side)
             if (x, y) not in protected and self.map[x, y] != -1:
                 self.map[x, y] = -1
                 obstacles_placed += 1
 
-    def divide_into_rooms(self):
-        self.state_space = None
-        assert self.room_count == 4, "Currently only supports 4 rooms."
-        room_divider = self.size // 2
-        self.map[room_divider, :] = -1
-        self.map[:, room_divider] = -1
-        x1 = self.rng.randint(room_divider)
-        self.map[x1, room_divider] = 0
-        x2 = self.rng.randint(room_divider + 1, self.size)
-        self.map[x2, room_divider] = 0
-        y1 = self.rng.randint(room_divider)
-        self.map[room_divider, y1] = 0
-        y2 = self.rng.randint(room_divider + 1, self.size)
-        self.map[room_divider, y2] = 0
-        # The dividers are drawn blind, so they can bury the start or the goal.
-        # Reopen those cells: same invariant place_random_obstacles keeps.
-        for cell in self.protected_cells():
-            if cell is not None:
-                self.map[cell] = 0
-
     def place_start_and_goal(self):
         if self.start_pos is None:
-            self.start_pos = (self.rng.randint(self.size), self.rng.randint(self.size))
+            self.start_pos = (self.rng.randint(self.board_side), self.rng.randint(self.board_side))
         if self.goal_pos is None:
-            self.goal_pos = (self.rng.randint(self.size), self.rng.randint(self.size))
+            self.goal_pos = (self.rng.randint(self.board_side), self.rng.randint(self.board_side))
 
     # ── Connectivity ─────────────────────────────────────────────────────────
     def get_all_neighbors(self, state):
@@ -199,9 +299,8 @@ class GridWorld:
         neighbors = []
         for dx, dy, action in [(0, -1, "left"), (0, 1, "right"), (-1, 0, "up"), (1, 0, "down")]:
             new_x, new_y = x + dx, y + dy
-            if 0 <= new_x < self.size and 0 <= new_y < self.size:
-                if self.map[new_x, new_y] != -1:
-                    neighbors.append(((new_x, new_y), action))
+            if self._edge_free((x, y), (new_x, new_y)):
+                neighbors.append(((new_x, new_y), action))
         return neighbors
 
     def check_goal_reached(self, state):
@@ -210,11 +309,9 @@ class GridWorld:
     def is_absorbing_state(self, state):
         """True when no action can leave `state` — the terminal sink.
 
-        Takes a *full* state (unlike check_goal_reached, which takes a position).
-        Defaults to "the agent stands on the goal cell", which is what the
-        reach-the-goal games want.  TaxiWorld overrides it: its destination cell
-        must stay passable until the passenger has actually been delivered, so
-        there the sink is the `delivered` flag, not the position.
+        Takes a *full* state, unlike check_goal_reached, which takes a position.
+        TaxiWorld overrides it: its destination must stay passable until the
+        passenger is delivered, so there the sink is the `delivered` flag.
         """
         return self.check_goal_reached(state[0])
 
@@ -231,15 +328,15 @@ class GridWorld:
         if self.state_space is not None:
             return None
         self.state_space = [[(i, j)]
-                            for i in range(self.size)
-                            for j in range(self.size)]
+                            for i in range(self.board_side)
+                            for j in range(self.board_side)]
 
     def get_state_space(self):
         if self.state_space is None:
             self.create_state_space()
         return self.state_space
 
-    def get_transition_probability_for_move(self, state, action, state_prime):
+    def _transition_probability_for_move(self, state, action, state_prime):
         if self.map[state[0]] == -1:
             return 1 if state == state_prime else 0
         if self.map[state_prime[0]] == -1:
@@ -252,10 +349,17 @@ class GridWorld:
         if (x_prime, y_prime) not in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1), (x, y)]:
             return 0
 
-        up_free = x - 1 >= 0 and self.map[x - 1, y] != -1
-        down_free = x + 1 < self.size and self.map[x + 1, y] != -1
-        left_free = y - 1 >= 0 and self.map[x, y - 1] != -1
-        right_free = y + 1 < self.size and self.map[x, y + 1] != -1
+        # A blocked edge is impossible as the outcome of *any* action, slip
+        # included.  Without this the branches below would hand it slip_prob: the
+        # cell beyond is free, and only the edge into it is blocked.
+        if ((x_prime, y_prime) != (x, y)
+                and not self._edge_free((x, y), (x_prime, y_prime))):
+            return 0
+
+        up_free = self._edge_free((x, y), (x - 1, y))
+        down_free = self._edge_free((x, y), (x + 1, y))
+        left_free = self._edge_free((x, y), (x, y - 1))
+        right_free = self._edge_free((x, y), (x, y + 1))
 
         if action == "up":
             total_prob = 1 + down_free + left_free + right_free
@@ -280,7 +384,7 @@ class GridWorld:
         assert False, "Should never reach here."
 
     def get_transition_probability(self, state, action, state_prime):
-        return self.get_transition_probability_for_move(state, action, state_prime)
+        return self._transition_probability_for_move(state, action, state_prime)
 
     def goal_reward_func(self, state, action, next_state):
         # check_goal_reached compares a bare position, so reward on the state's
@@ -310,25 +414,175 @@ class GridWorld:
     def get_goal_states(self):
         return [[self.goal_pos]]
 
+    def cell_char(self, i, j):
+        """The one character standing for cell ``(i, j)``.
+
+        Subclasses override *this* rather than ``visualize``: drawing thin walls
+        is the same work whatever a cell contains, so overriding ``visualize``
+        would fork it into four copies that then drift.
+        """
+        if (i, j) == self.start_pos:
+            return "S"
+        if (i, j) == self.goal_pos:
+            return "G"
+        if self.map[i, j] == -1:
+            return "#"
+        return "."
+
+    def wall_char(self, a, b):
+        """The one character standing for the gap between adjacent cells a and b.
+
+        The counterpart of ``cell_char``: that one says what is *in* a cell, this
+        one what is *between* two.  ``" "`` when both directions are open, the
+        door character when only the forward one survives, a wall otherwise.
+        """
+        same_row = a[0] == b[0]          # side by side, so the gap runs vertically
+        forward_open = (a, b) not in self.blocked_edges
+        backward_open = (b, a) not in self.blocked_edges
+        if forward_open and backward_open:
+            return " "
+        if forward_open:
+            return ">" if same_row else "v"
+        if backward_open:
+            return "<" if same_row else "^"
+        return "|" if same_row else "-"
+
     def visualize(self):
-        """ASCII render of the grid. Subclasses override this to show their
-        own map symbols (puddles, rocks, passenger, ...)."""
-        for i in range(self.size):
+        """ASCII render of the board.
+
+        With no walls this is the plain ``". . . G"`` grid.  With a room grid the
+        gaps are drawn too: ``|`` and ``-`` are sealed, and a door shows the one
+        direction it allows — ``>`` east, ``v`` south.  So ``. > .`` means "step
+        right and you are in the next room, with no way back".
+        """
+        has_walls = bool(self.blocked_edges)
+        for i in range(self.board_side):
             row = ""
-            for j in range(self.size):
-                if (i, j) == self.start_pos:
-                    row += "S "
-                elif (i, j) == self.goal_pos:
-                    row += "G "
-                elif self.map[i, j] == -1:
-                    row += "# "
-                else:
-                    row += ". "
+            for j in range(self.board_side):
+                row += self.cell_char(i, j)
+                if j + 1 < self.board_side:
+                    row += self.wall_char((i, j), (i, j + 1)) if has_walls else " "
             print(row)
+            if has_walls and i + 1 < self.board_side:
+                gap = ""
+                for j in range(self.board_side):
+                    gap += self.wall_char((i, j), (i + 1, j))
+                    if j + 1 < self.board_side:
+                        gap += " "
+                print(gap)
+
+    # ── Image rendering ──────────────────────────────────────────────────────
+    # One entry per character cell_char() can return: (fill colour, text colour).
+    # Subclasses extend this dict rather than reimplementing render(): cell_char
+    # says *what* is in a cell, CHAR_STYLE how it looks.
+    CHAR_STYLE = {
+        ".": ("#ffffff", "#000000"),      # free cell
+        "#": ("#37474f", "#ffffff"),      # obstacle
+        "S": ("#1e88e5", "#ffffff"),      # start
+        "G": ("#43a047", "#ffffff"),      # goal
+    }
+    WALL_COLOR = "#212121"
+    DOOR_COLOR = "#ef6c00"
+    GRID_COLOR = "#e0e0e0"
+
+    def render(self, cell_px=54, dpi=100, title=None, show_coords=True):
+        """Draw the board and return it as a ``PIL.Image.Image``.
+
+        A picture rather than a print: a sealed crossing is a bar *between* two
+        cells and a door an arrow through it, which is the geometry the MDP
+        implements and the thing ASCII can only hint at.
+
+        A notebook shows the returned image inline, and saving is its own job::
+
+            img = mdp.render()
+            img.save("board.png")          # or .pdf, .jpg, ...
+
+        matplotlib is imported here, not at module scope, so this module stays
+        importable with numpy alone; the figure goes through the Agg canvas rather
+        than pyplot so rendering never touches a notebook's current figure.
+        """
+        from PIL import Image
+        from matplotlib.figure import Figure
+        from matplotlib.patches import Rectangle
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        n = self.board_side
+        pad = 0.6 if show_coords else 0.15
+        fig = Figure(figsize=((n + 2 * pad) * cell_px / dpi,
+                              (n + 2 * pad) * cell_px / dpi), dpi=dpi)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_axes((0, 0, 1, 1))
+        ax.set_xlim(-pad, n + pad)
+        ax.set_ylim(n + pad, -pad)          # row 0 on top, like the ASCII render
+        ax.set_aspect("equal")
+        ax.axis("off")
+
+        default = self.CHAR_STYLE["."]
+        for i in range(n):
+            for j in range(n):
+                char = self.cell_char(i, j)
+                fill, ink = self.CHAR_STYLE.get(char, default)
+                ax.add_patch(Rectangle((j, i), 1, 1, facecolor=fill,
+                                       edgecolor=self.GRID_COLOR, linewidth=0.8))
+                if char not in (".", "#"):
+                    ax.text(j + 0.5, i + 0.5, char, color=ink, ha="center",
+                            va="center", fontsize=cell_px * 0.30, fontweight="bold")
+
+        # Walls live on the boundaries, so they are drawn after every cell.
+        for i in range(n):
+            for j in range(n):
+                if j + 1 < n:
+                    self._draw_boundary(ax, (i, j), (i, j + 1), cell_px)
+                if i + 1 < n:
+                    self._draw_boundary(ax, (i, j), (i + 1, j), cell_px)
+        ax.add_patch(Rectangle((0, 0), n, n, fill=False,
+                               edgecolor=self.WALL_COLOR, linewidth=2.2))
+
+        if show_coords:
+            for k in range(n):
+                ax.text(k + 0.5, -0.28, str(k), ha="center", va="center",
+                        fontsize=cell_px * 0.17, color="#9e9e9e")
+                ax.text(-0.28, k + 0.5, str(k), ha="center", va="center",
+                        fontsize=cell_px * 0.17, color="#9e9e9e")
+        if title:
+            ax.set_title(title, fontsize=cell_px * 0.22, pad=6)
+
+        canvas.draw()
+        return Image.frombytes("RGBA", canvas.get_width_height(),
+                               bytes(canvas.buffer_rgba()))
+
+    def _draw_boundary(self, ax, a, b, cell_px):
+        """Draw the wall or door on the boundary between adjacent cells a and b."""
+        sep = self.wall_char(a, b)
+        if sep == " ":
+            return
+        same_row = a[0] == b[0]              # a and b side by side -> vertical wall
+        if same_row:
+            x, y = b[1], a[0] + 0.5          # the shared edge is the column x
+            wall = ((x, x), (a[0], a[0] + 1))
+            arrow = ((x - 0.42, y), (x + 0.42, y))
+        else:
+            x, y = a[1] + 0.5, b[0]
+            wall = ((a[1], a[1] + 1), (y, y))
+            arrow = ((x, y - 0.42), (x, y + 0.42))
+
+        if sep in ("|", "-"):                # sealed both ways
+            ax.plot(*wall, color=self.WALL_COLOR, linewidth=2.6,
+                    solid_capstyle="butt")
+            return
+        # A door: an arrow through the gap, no bar.  "<" and "^" are reachable
+        # only if a caller blocks edges by hand — build_one_way_rooms never does.
+        (x0, y0), (x1, y1) = arrow
+        if sep in ("<", "^"):
+            (x0, y0), (x1, y1) = (x1, y1), (x0, y0)
+        ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                    arrowprops=dict(arrowstyle="-|>", color=self.DOOR_COLOR,
+                                    linewidth=2.2, mutation_scale=cell_px * 0.30,
+                                    shrinkA=0, shrinkB=0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Determinization — identical to parallel_experiments_2._augment_mdp_to_deterministic
+# Determinization
 # ─────────────────────────────────────────────────────────────────────────────
 
 def augment_mdp_to_deterministic(mdp):

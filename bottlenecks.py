@@ -12,10 +12,9 @@ problem instance is fully described by four things:
     start_state  where every trajectory begins
     goal_state   the absorbing state every successful trajectory ends in
 
-The game module builds those four things (for Overcooked, that is
-Overcooked/overcooked_env.py, one configuration at a time) and the game's viz
-module decodes state IDs back into something readable.  This module is shared
-across games and depends on neither.
+The game module builds those four things — for Overcooked, overcooked_env.py,
+one configuration at a time.  This module is shared across games and knows about
+none of them.
 
 Pipeline
 --------
@@ -405,12 +404,40 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
     achievable_masks = []
     _counter         = [0]
 
+    # A trajectory has to *finish*.  One-way doors make the transition graph not
+    # strongly connected — a room whose exits are all blocked is a trap — so
+    # visiting order alone does not settle achievability: a subset counts only if
+    # some order covering it can still reach the goal afterwards.  Bottlenecks
+    # inside a trap then belong to no I_k at all: still queryable, not achievable.
+    # It is also what keeps the universal-bottleneck invariant below true rather
+    # than merely asserted.
+    goal_bit = (possible_bottlenecks.index(goal_state)
+                if goal_state in possible_bottlenecks else None)
+
+    def completable(mask):
+        """Can a visiting order covering ``mask`` still end at the goal?
+
+        ``mask == 0`` is handled apart from the memo: the DFS descends the
+        exclude branch first, so the empty subset reaches here before any call has
+        recorded ``memo[0]``.
+        """
+        if goal_bit is None:            # no goal in the set: nothing to require
+            return True
+        if mask == 0:                   # visit nothing, head straight for the goal
+            return bool(from_start[goal_bit])
+        end_bits = memo[mask]           # which bottlenecks an order can finish on
+        # A subset containing the goal needs no special case: the goal is
+        # reachable from the goal, so it is its own valid continuation.
+        return any((end_bits >> i) & 1 and from_bottleneck[i, goal_bit]
+                   for i in range(n))
+
     def generate_subsets(index, current_mask):
         _counter[0] += 1
         if verbose and _counter[0] % 20_000 == 0:
             print(f"  {_counter[0]:7d} calls, depth {index}/{n}", end='\r', flush=True)
         if index == n:
-            achievable_masks.append(current_mask)
+            if completable(current_mask):
+                achievable_masks.append(current_mask)
             return
         generate_subsets(index + 1, current_mask)
         new_mask = current_mask | (1 << index)
@@ -1036,12 +1063,9 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
     # V_R decide the order.
     #
     # This is not a tie-breaking nicety, it is where the questions are.  A
-    # bottleneck unreachable in M_R cannot sit in any achievable subset, so it
-    # belongs to no hypothesis — which makes B \ I exactly the unreachable set.
-    # Success requires a NO on every bottleneck outside the chosen hypothesis
-    # (only NOs shrink I_hat), so those are precisely the queries that must be
-    # spent; a YES on one instead proves the human is outside I and ends the
-    # episode immediately.  Either way, asking them first is never wasted.
+    # bottleneck unreachable in M_R sits in no achievable subset, so B \ I is
+    # exactly the unreachable set, and success requires a NO on every bottleneck
+    # outside the chosen hypothesis.  Asking them first is never wasted.
     #
     # +inf rather than a value derived from V_R: V_R's range moves with the game
     # and the board (roughly [-45, +17] on rockworld, [0, 1] on gridworld), so

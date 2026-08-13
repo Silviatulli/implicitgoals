@@ -2,9 +2,8 @@
 taxiworld.py — TaxiWorld + determinized-MDP generator.
 ==========================================================
 
-Exported from the *implicitgoals* research repo. Builds on the shared
-``GridWorld`` MDP and ``augment_mdp_to_deterministic`` helper defined in
-``gridworld_core.py`` (the same core used by gridworld.py, puddleworld.py,
+Builds on the shared ``GridWorld`` MDP and ``augment_mdp_to_deterministic``
+helper defined in ``gridworld_core.py`` (the same core used by gridworld.py, puddleworld.py,
 and rockworld.py — see that module for the shared plumbing).
 
 TaxiWorld is a GridWorld where a taxi must pick up a passenger and drop it at a
@@ -21,16 +20,11 @@ destination cell stays passable until the delivery actually happens.
 Rewards are cost-to-go: ``−1`` per action until delivery, ``0`` for ever after,
 and an extra ``−10`` for dropping the passenger anywhere else.
 
-NOTE: the ``generate_and_visualize_taxiworld`` in the repo's ``experiments.py``
-was out of sync with the ``TaxiWorld`` constructor (it passed multi-passenger
-args the class does not accept) and was never exercised, since taxi only runs
-off-macOS. The version here is written to match the real single-passenger class.
-
 Quick start
 -----------
     from taxiworld import generate_determinized_models
-    out = generate_determinized_models(size=4, num_humans=3,
-                                       obstacles_percent=0.1, seed=0)
+    out = generate_determinized_models(room_side=4, num_humans=3,
+                                       obstacle_density=0.1, seed=0)
     T_R, s0, g = out["robot"][:3]
     print(out["total_determinizing_time"])
 """
@@ -40,11 +34,12 @@ import random
 
 import numpy as np
 
-from gridworld_core import GridWorld, augment_mdp_to_deterministic, seeded_rng
+from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
+                            seeded_rng)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TaxiWorld (ported from TaxiWorldClass.py)
+# TaxiWorld
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TaxiWorld(GridWorld):
@@ -54,30 +49,33 @@ class TaxiWorld(GridWorld):
     goal ``[destination, False, True]`` mean "task complete" rather than merely
     "standing on the destination"."""
 
-    def __init__(self, size=5, start=None, passenger_loc=None, destination=None,
-                 obstacles_percent=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
-                 obstacle_seed=1, wrong_dropoff_penalty=-10):
-        self.size = size  # needed before place_random_location
+    def __init__(self, start=None, passenger_loc=None, destination=None,
+                 obstacle_density=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
+                 obstacle_seed=1, wrong_dropoff_penalty=-10,
+                 rooms_per_side=1, room_side=5):
+        # The passenger is drawn before GridWorld.__init__ runs, so this world has
+        # to know the board a step earlier than the others do.
+        self.board_side = board_side(rooms_per_side, room_side)
         # This world draws *before* GridWorld.__init__ runs, so it builds the
         # generator and GridWorld adopts it rather than seeding a second one.
         obstacle_seed, self.rng = seeded_rng(obstacle_seed)
         self.passenger_loc = passenger_loc if passenger_loc is not None else self.place_random_location()
         self.wrong_dropoff_penalty = wrong_dropoff_penalty
-        super().__init__(size=size, start=start, goal=destination,
-                         obstacles_percent=obstacles_percent, slip_prob=slip_prob,
-                         discount=discount, max_tries=max_tries, obstacle_seed=obstacle_seed)
+        super().__init__(start=start, goal=destination,
+                         obstacle_density=obstacle_density, slip_prob=slip_prob,
+                         discount=discount, max_tries=max_tries, obstacle_seed=obstacle_seed,
+                         rooms_per_side=rooms_per_side,
+                         room_side=room_side)
         self.destination = self.goal_pos  # reuse goal_pos as destination
         self.reward_func = self.taxi_reward_func
-        # The passenger was drawn before the map existed, so it may have landed
-        # under an obstacle or in a walled-off pocket.  That used to be
-        # harmless — the old goal [destination, False] was reachable without
-        # ever collecting the passenger — but the delivered goal is not, so an
-        # unreachable passenger now means an unreachable goal.  Fix it here.
+        # The passenger was drawn before the map existed, so it may sit under an
+        # obstacle or in a walled-off pocket.  The delivered goal cannot be
+        # reached without collecting it, so an unreachable fare is a dead board.
         self._ensure_passenger_reachable()
 
     def place_random_location(self):
         while True:
-            x, y = self.rng.randint(self.size), self.rng.randint(self.size)
+            x, y = self.rng.randint(self.board_side), self.rng.randint(self.board_side)
             if not hasattr(self, 'map') or self.map[x, y] != -1:
                 return (x, y)
 
@@ -89,9 +87,15 @@ class TaxiWorld(GridWorld):
         """
         return super().protected_cells() | {self.passenger_loc}
 
-    def _reachable_positions(self):
-        """Cells reachable from the start by moves (obstacles block)."""
-        seen, frontier = {self.start_pos}, [self.start_pos]
+    def _reachable_positions(self, origin=None):
+        """Cells reachable from ``origin`` (the start by default) by moves.
+
+        Obstacles block, and so does the wrong side of a one-way door: this walks
+        ``get_all_neighbors``, the directed edge set.  Reachability is therefore
+        not symmetric, which is why the caller says where it starts.
+        """
+        origin = self.start_pos if origin is None else origin
+        seen, frontier = {origin}, [origin]
         while frontier:
             for nxt, _ in self.get_all_neighbors(frontier.pop()):
                 if nxt not in seen:
@@ -99,13 +103,34 @@ class TaxiWorld(GridWorld):
                     frontier.append(nxt)
         return seen
 
+    def check_for_path(self):
+        """Is there a trajectory from the initial state to the *goal state*?
+
+        GridWorld walks to the goal cell, which is enough when the goal is "stand
+        here".  Here the goal state is ``[destination, False, True]`` and
+        ``delivered`` latches only on a dropoff while carrying, so standing on the
+        destination proves nothing — the taxi has to fetch the passenger first.
+
+        The trajectory therefore needs two legs, start -> passenger and
+        passenger -> destination, which on a room-grid board are genuinely two
+        questions: a one-way door can let the taxi reach the fare and then strand
+        it.  Overriding this is what makes the retry loop redraw such a board.
+
+        Runs from inside ``GridWorld.__init__``, before ``self.destination``
+        exists, so it reads ``goal_pos`` — the same cell under an earlier name.
+        """
+        if self.start_pos is None or self.goal_pos is None:
+            return False
+        if self.passenger_loc not in self._reachable_positions(self.start_pos):
+            return False
+        return self.goal_pos in self._reachable_positions(self.passenger_loc)
+
     def _ensure_passenger_reachable(self):
         """Relocate the passenger if it is unreachable from the start.
 
         Prefers a cell the taxi can actually drive to; the destination itself is
-        allowed (pick up and drop off on the spot) and is the last-resort choice,
-        since start→destination connectivity is already guaranteed by
-        GridWorld.check_for_path.
+        the last-resort choice (pick up and drop off on the spot), since
+        start-to-destination connectivity is already guaranteed.
         """
         reachable = self._reachable_positions()
         if self.passenger_loc in reachable:
@@ -128,8 +153,8 @@ class TaxiWorld(GridWorld):
         (True, True) is never enumerated.
         """
         self.state_space = []
-        for i in range(self.size):
-            for j in range(self.size):
+        for i in range(self.board_side):
+            for j in range(self.board_side):
                 for carrying, delivered in ((False, False), (True, False), (False, True)):
                     self.state_space.append([(i, j), carrying, delivered])
 
@@ -188,55 +213,66 @@ class TaxiWorld(GridWorld):
         # the destination, which is the whole point of the third slot.
         return [[self.destination, False, True]]
 
-    def visualize(self):
-        for i in range(self.size):
-            row = ""
-            for j in range(self.size):
-                if (i, j) == self.start_pos:
-                    row += "T "
-                elif (i, j) == self.passenger_loc:
-                    row += "P "
-                elif (i, j) == self.destination:
-                    row += "D "
-                elif self.map[i, j] == -1:
-                    row += "# "
-                else:
-                    row += ". "
-            print(row)
+    # "D" is the destination here, not RockWorld's dangerous rock — the palette is
+    # per class precisely so the same letter can mean different things per game.
+    CHAR_STYLE = {**GridWorld.CHAR_STYLE,
+                   "T": ("#1e88e5", "#ffffff"),      # the taxi's start
+                   "P": ("#8e24aa", "#ffffff"),      # the passenger
+                   "D": ("#43a047", "#ffffff")}      # the destination
+
+    def cell_char(self, i, j):
+        """``T`` taxi start, ``P`` passenger, ``D`` destination, ``#`` obstacle."""
+        if (i, j) == self.start_pos:
+            return "T"
+        if (i, j) == self.passenger_loc:
+            return "P"
+        if (i, j) == self.destination:
+            return "D"
+        if self.map[i, j] == -1:
+            return "#"
+        return "."
 
 
-def generate_and_visualize_taxiworld(size, start, goal, obstacles_percent,
+def generate_and_visualize_taxiworld(start, goal, obstacle_density,
                                      model_type="Model", obstacle_seed=None,
-                                     passenger_loc=None, destination=None):
+                                     passenger_loc=None, destination=None,
+                                     rooms_per_side=1, room_side=5):
     """Generate a single-passenger ``TaxiWorld``.
 
     ``destination`` defaults to ``goal`` (or the bottom-right corner); the
-    passenger is placed at a random cell if ``passenger_loc`` is None.
+    passenger is placed at a random cell if ``passenger_loc`` is None.  Both
+    fall-backs are measured on the board the two room numbers describe, which is
+    the same board TaxiWorld will build.
     """
+    n = board_side(rooms_per_side, room_side)
     if destination is None:
-        destination = goal if goal is not None else (size - 1, size - 1)
+        destination = goal if goal is not None else (n - 1, n - 1)
     if passenger_loc is None:
-        passenger_loc = (random.randint(0, size - 1), random.randint(0, size - 1))
-    return TaxiWorld(size=size, start=start, passenger_loc=passenger_loc,
-                     destination=destination, obstacles_percent=obstacles_percent,
-                     obstacle_seed=obstacle_seed)
+        passenger_loc = (random.randint(0, n - 1), random.randint(0, n - 1))
+    return TaxiWorld(start=start, passenger_loc=passenger_loc,
+                     destination=destination, obstacle_density=obstacle_density,
+                     obstacle_seed=obstacle_seed, rooms_per_side=rooms_per_side,
+                     room_side=room_side)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # High-level driver — robot + N humans, with compute timing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_determinized(size, obstacles_percent, model_type, visualize=False,
-                       passenger_loc=None):
+def _make_determinized(obstacle_density, model_type, visualize=False,
+                       passenger_loc=None, rooms_per_side=1, room_side=5):
     """Generate one taxi world and determinize it; returns (next_states, s0, g, det_time).
 
     ``passenger_loc`` is passed down so every model of an instance shares it; see
     generate_determinized_models.  If ``visualize`` is True, print the generated
     map before determinizing.
     """
+    n = board_side(rooms_per_side, room_side)
     mdp = generate_and_visualize_taxiworld(
-        size=size, start=(0, 0), goal=(size - 1, size - 1),
-        obstacles_percent=obstacles_percent, passenger_loc=passenger_loc,
+        start=(0, 0), goal=(n - 1, n - 1),
+        obstacle_density=obstacle_density, passenger_loc=passenger_loc,
+        rooms_per_side=rooms_per_side,
+        room_side=room_side,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -248,15 +284,20 @@ def _make_determinized(size, obstacles_percent, model_type, visualize=False,
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 
-def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
-                                 seed=None, verbose=True, visualize=False):
+def generate_determinized_models(num_humans=3, obstacle_density=0.1,
+                                 seed=None, verbose=True, visualize=False,
+                                 rooms_per_side=1, room_side=4):
     """Build a robot model + ``num_humans`` human TaxiWorld models and determinize each.
 
     Parameters
     ----------
-    size : int              grid side length
     num_humans : int        number of human models
-    obstacles_percent : float   obstacle density in [0, 1]
+    obstacle_density : float   obstacle density in [0, 1]
+    rooms_per_side : int    rooms along each side of the board; 1 is the open
+                            board, one room and no walls
+    room_side : int         cells along each side of one room, so the board is
+                            ``rooms_per_side * room_side`` — walls are thin, and
+                            no cell is spent on them
     seed : int or None      seeds ``random``/``numpy`` for reproducibility
     verbose : bool          print a short timing summary
     visualize : bool        print each generated map (robot + humans)
@@ -266,29 +307,38 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
     dict: 'robot', 'humans', 'determinizing_times', 'total_determinizing_time'
     (each model is a tuple ``(next_states, start_idx, goal_idx, det_time)``)
     """
+    # The shared passenger cell below is drawn on this board, and every model
+    # then builds the same one from the same two room numbers.
+    size = board_side(rooms_per_side, room_side)
+
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
-    # One passenger for the whole instance: the robot and every human agree on
-    # where the fare is, and only the obstacle map varies between them — the same
-    # convention the other grid games follow for start and goal.  Drawing it per
-    # model instead made each human's pickup its own bottleneck, so |B| (the
-    # union over humans) grew with the human count and blew past
+    # One passenger for the whole instance, as with start and goal: only the
+    # obstacle map varies between models.  Drawing it per model made each human's
+    # pickup its own bottleneck, so |B| grew with the human count and blew past
     # --max-bottlenecks, skipping every taxi repetition.
     passenger_loc = (random.randint(0, size - 1), random.randint(0, size - 1))
 
-    robot = _make_determinized(size, obstacles_percent, "Robot Model", visualize,
-                               passenger_loc=passenger_loc)
-    humans = [_make_determinized(size, obstacles_percent, f"Human Model {i + 1}",
-                                 visualize, passenger_loc=passenger_loc)
+    robot = _make_determinized(obstacle_density, "Robot Model", visualize,
+                               passenger_loc=passenger_loc, rooms_per_side=rooms_per_side,
+                               room_side=room_side)
+    humans = [_make_determinized(obstacle_density, f"Human Model {i + 1}",
+                                 visualize, passenger_loc=passenger_loc,
+                                 rooms_per_side=rooms_per_side,
+                                 room_side=room_side)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
     total = float(sum(det_times))
 
     if verbose:
-        print(f"[taxiworld] size={size} obstacles={obstacles_percent} humans={len(humans)}")
+        geometry = (f"{size}x{size} open board" if rooms_per_side == 1 else
+                    f"{size}x{size} board = {rooms_per_side}x{rooms_per_side} rooms "
+                    f"of {room_side}x{room_side}")
+        print(f"[taxiworld] {geometry}, {size * size} cells, "
+              f"obstacles={obstacle_density} humans={len(humans)}")
         print(f"  robot: {robot[0].shape[0]} states x {robot[0].shape[1]} actions "
               f"(determinized in {robot[3]:.4f}s)")
         print(f"  total determinizing time: {total:.4f}s")
@@ -303,8 +353,8 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
 
 
 if __name__ == "__main__":
-    out = generate_determinized_models(size=4, num_humans=3,
-                                       obstacles_percent=0.1, seed=0, visualize=True)
+    out = generate_determinized_models(room_side=4, num_humans=3,
+                                       obstacle_density=0.1, seed=0, visualize=True)
     T_R, s0, g, _ = out["robot"]
     print("\nRobot determinized transition array shape:", T_R.shape)
     print("start index:", s0, " goal index:", g)

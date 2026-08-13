@@ -4,11 +4,44 @@ experiment.py
 Cross-game benchmark: run the same bottleneck / Query-MDP pipeline on all five
 games and write the comparison to CSV.
 
-    python experiment.py --num-simu 200 --sizes 4 5 6 --humans 1 3 5
+    python experiment.py --num-simu 200 --room-sides 2 3 4 --humans 1 3 5
 
-Each (game, size, humans) combination is repeated --num-simu times, and every
-repetition rebuilds the instance from scratch — a fresh random map for the four
-grid games — so every number reported is a mean over those repetitions.
+Each (game, room side, humans) combination is repeated --num-simu times, and
+every repetition rebuilds the instance from scratch — a fresh random map for the
+four grid games — so every number reported is a mean over those repetitions.
+
+Board geometry (the four grid games).  Two numbers describe it:
+--rooms-per-side R     rooms along each side of the board
+--room-sides C         cells along each side of one room
+so every room is a C x C square and the room grid is R x R.  The walls are thin —
+they run *between* cells rather than occupying any — so the board is exactly
+R * C cells per side, nothing is spent on the walls, and a door is an *edge*: you
+stand west of a door, step right, and you are in the next room, never standing in
+the door itself.  The default R=3, C=3 is a 9x9 board of nine 3x3 rooms, and
+--rooms-per-side 1 is the degenerate case: one room, no walls, an open C x C board.
+
+Every wall between two neighbouring rooms carries exactly one door, and it is
+**one-way** — east or south only — sitting at the middle of that wall.  Doors are
+shared by the robot and every human, like the start, the goal and the taxi's
+passenger; only the obstacles vary between models.  Drawing a door per model
+instead put each human's mandatory waypoints on different cells, so |B| — the
+union over the humans — grew linearly with the human count and ran past
+--max-bottlenecks, which Algorithm 1's 2^|B_filter| cost cannot absorb.
+
+The orientation is the point.  On an open grid a single trajectory can tour every
+bottleneck and come back, so Algorithm 1 always finds exactly one maximally
+achievable subset — |I| = 1 whatever the obstacle layout.  One-way doors make the
+room grid a DAG: stepping through a door commits, the doors of the routes not
+taken become unreachable, and |I| grows to the number of monotone routes through
+the room grid (up to 6 for 3x3, 20 for 4x4).
+
+--humans is bounded by the same 2^|B_filter| cost, since B is the union over the
+humans.  Measured on the default 3x3 board of 3x3 rooms at the default density,
+over 6 repetitions, the share skipped for exceeding --max-bottlenecks runs 0/6 at
+3 humans, 1/6 at 5, 3/6 at 10 and 6/6 from 20 up (gridworld; taxiworld is one step
+worse at each, its states carrying the passenger flags on top of the cells).  So
+10 is where it starts costing repetitions and 20 is where nothing survives.
+Overcooked is unaffected — its bottlenecks come from recipes, not maps.
 
 Five conditions per repetition: the four selection rules (VI, H1 Info Gain,
 H3 Goal Proximity, H4 Query Frequency), plus the random-order "query all"
@@ -61,7 +94,8 @@ from overcooked_env import (
     # the robot's stochastic model, pruned to the reachable states — Hypothesis 3
     build_stochastic_matrix as overcooked_stochastic_matrix,
 )
-from gridworld_core import build_stochastic_matrix as grid_stochastic_matrix
+from gridworld_core import (build_stochastic_matrix as grid_stochastic_matrix,
+                            board_side)
 # Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
 # directly instead of a stochastic MDP to determinize: there is no
 # augment_mdp_to_deterministic step, the matrices are already
@@ -87,18 +121,15 @@ from bottlenecks import (
 )
 
 
-# Four selection rules, each run twice — once alone, once wearing the H2
-# dominance mask — plus the random-order control.  Nine columns.
+# Four selection rules plus the random-order control: five columns, or nine with
+# --h2, which runs each rule a second time wearing the dominance mask.
 #
 # H2 gets no column of its own because it is not a selection rule: it never
 # chooses a query, it only widens K_not after a NO.  It is applied at inference
 # (evaluate_policy_on_real_human(dominance=...)), so the paired columns share one
-# policy object and differ only in whether the mask is passed.
-#
-# The H2 columns are opt-in (--h2): off, a run has five columns — Random and the
-# four rules alone — and never builds the dominance mask at all.  Everything
-# downstream (CSV fields, plots, summary) is derived from the condition list the
-# run actually used, so the two shapes stay consistent with each other.
+# policy object and differ only in whether the mask is passed.  With --h2 off the
+# mask is never built, and the CSV fields, plots and summary all follow the
+# condition list the run actually used.
 BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
 
 
@@ -122,11 +153,10 @@ for _b, _lab in BASE_LABELS.items():
     CONDITION_LABELS[_b] = _lab
     CONDITION_LABELS[f"{_b}_h2"] = f"{_lab} + H2"
 
-# One hue per selection rule, two shades of it: light for the rule alone, dark
-# for the same rule wearing H2.  So hue answers "which rule?" and shade answers
-# "with H2 or not?", and the height difference within a pair is what the
-# dominance layer bought.  tab20 is built for exactly this — ten (dark, light)
-# pairs of the same hue.  Random is grey: it is a control, not a rule.
+# One hue per selection rule, two shades of it: hue answers "which rule?", shade
+# answers "with H2 or not?", so the gap within a pair is what the dominance layer
+# bought.  tab20 is built for this — ten (dark, light) pairs of one hue.  Random
+# is grey: a control, not a rule.
 _TAB20 = plt.get_cmap("tab20").colors
 CONDITION_COLORS = {"query_all": "#9e9e9e"}
 for _i, _b in enumerate(BASES):
@@ -154,25 +184,29 @@ def _quiet():
         yield
 
 
-def build_grid_instance(game, size, num_humans, seed=None, obstacles_percent=0.1,
-                        puddle_percent=0.2, rock_percent=0.3, divide_rooms=False):
+def build_grid_instance(game, room_side, num_humans, seed=None, obstacle_density=0.1,
+                        puddle_density=0.2, rock_density=0.3, rooms_per_side=3):
     """Generate + determinize one grid-domain instance.
+
+    ``room_side`` is the side of one **room**, which is what --room-sides sweeps;
+    the board the generators build is ``board_side(rooms_per_side, room_side)``.
 
     The density arguments are not shared: each generator accepts obstacles plus
     at most one domain-specific extra, so they are dispatched per game rather
     than passed as one common kwargs dict.
     """
-    kwargs = dict(size=size, num_humans=num_humans, seed=seed,
-                  obstacles_percent=obstacles_percent,
+    kwargs = dict(num_humans=num_humans, seed=seed,
+                  obstacle_density=obstacle_density,
+                  rooms_per_side=rooms_per_side, room_side=room_side,
                   verbose=False, visualize=False)
     t0 = time.perf_counter()
     with _quiet():
         if game == "gridworld":
-            out = generate_determinized_gridworlds(divide_rooms=divide_rooms, **kwargs)
+            out = generate_determinized_gridworlds(**kwargs)
         elif game == "puddleworld":
-            out = generate_determinized_puddleworlds(puddle_percent=puddle_percent, **kwargs)
+            out = generate_determinized_puddleworlds(puddle_density=puddle_density, **kwargs)
         elif game == "rockworld":
-            out = generate_determinized_rockworlds(rock_percent=rock_percent, **kwargs)
+            out = generate_determinized_rockworlds(rock_density=rock_density, **kwargs)
         elif game == "taxiworld":
             out = generate_determinized_taxiworlds(**kwargs)
         else:
@@ -313,18 +347,16 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     row: dict = {"n_states": int(T_R.shape[0]), "n_actions": int(T_R.shape[1]),
                  "n_humans": len(T_H_list), "n_reachable": float("nan")}
 
-    # B comes from the *candidate humans*, not from T_R — this is what the
-    # reference implementation does, and it is what makes the problem non-empty.
-    # Sourcing B from T_R makes every bottleneck a dominator of T_R, hence
-    # trivially achievable in T_R, hence |I| == 1 for any reversible domain.
-    # Achievability below is still tested against T_R: "which of the waypoints
-    # some human might care about can the robot actually visit, and together?"
+    # B comes from the *candidate humans*, not from T_R.  Sourcing it from T_R
+    # makes every bottleneck a dominator of T_R, hence trivially achievable,
+    # hence |I| == 1 for any reversible domain.  Achievability below is still
+    # tested against T_R: "which of these waypoints can the robot visit, and
+    # together?"
     #
-    # One dominator pass, two products: the per-matrix sets (the ensemble the
-    # Oracle is built from, and the pool the evaluated human is drawn from) and
-    # their union B.  A separate "union" helper would repeat the identical pass
-    # over the identical matrices, so t_bottlenecks carries the whole cost and
-    # t_oracle_sets is only the union that falls out of it.
+    # One dominator pass, two products: the per-matrix sets (the Oracle's
+    # ensemble, and the pool the evaluated human is drawn from) and their union
+    # B.  t_bottlenecks therefore carries the whole cost and t_oracle_sets only
+    # the union that falls out of it.
     t0 = time.perf_counter()
     with _quiet():
         oracle_sets = compute_bottlenecks_per_matrix(T_H_list, start_state, goal_state)
@@ -366,11 +398,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                                               goal_state, verbose=False)
     row["t_algorithm1"] = time.perf_counter() - t0
 
-    # The query set: everything the robot may ask about.  It is B_filter,
-    # *not* the labels occurring in I — see the docstring.  The same ordering is
-    # handed to solve_query_mdp_exact, so the exact policy's action indices and
-    # I_array's columns refer to the same bottleneck; letting the solver infer
-    # its own order from I would silently desynchronise the two.
+    # The query set: everything the robot may ask about.  It is B_filter, *not*
+    # the labels occurring in I — see the docstring.  The same ordering goes to
+    # solve_query_mdp_exact, so action indices and I_array columns mean the same
+    # bottleneck; letting the solver infer its own order would desynchronise them.
     I_array  = subsets_to_array(I, B_filter)
     b_to_int = bottleneck_index(B_filter)
 
@@ -391,18 +422,15 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     oracle = Oracle(oracle_sets, n_states=max(int(T_R.shape[0]), int(goal_state) + 1))
 
     # ── Build one policy per selection rule ─────────────────────────────────
-    # Each t_solve_* below is what that condition would cost *run on its own*.
-    # Work shared between conditions is therefore added to every condition that
-    # needs it, never counted once and amortised: the dominance mask is built
-    # once but charged to all four "+ H2" columns, because dropping the other
-    # three would not make it any cheaper for the one that remains.
+    # Each t_solve_* below is what that condition would cost *run on its own*, so
+    # shared work is added to every condition needing it rather than amortised:
+    # the dominance mask is built once but charged to all four "+ H2" columns.
     #
-    # max_exact_n gates the VI baseline *alone*.  It exists because
-    # solve_query_mdp_exact allocates 3^n knowledge states; the three greedy
-    # rules score B_filter on the fly and cost microseconds at any n, so
-    # skipping them alongside it would hide exactly the regime they are for.
-    # (max_bottlenecks, above, is the other kind of cap: Algorithm 1 produces I,
-    # which every condition needs, so exceeding it skips the repetition whole.)
+    # max_exact_n gates the VI baseline *alone*, because solve_query_mdp_exact
+    # allocates 3^n knowledge states while the greedy rules cost microseconds at
+    # any n — skipping them alongside it would hide the regime they are for.
+    # (max_bottlenecks is the other kind of cap: I is needed by every condition,
+    # so exceeding it skips the repetition whole.)
     policies, base_solve = {}, {}
     if n > max_exact_n:
         policies["strategic_exact"]   = None
@@ -480,12 +508,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
             dominance=dominance if name.endswith("_h2") else None)
         row[f"t_sim_{name}"] = time.perf_counter() - t0
         # Read the flag off a condition that does not wear H2.  Every condition
-        # reports the same one — success means the drawn human is representable
-        # in I, a property of the instance, not of the rule (see the docstring),
-        # and build_dominance is built so that H2 changes the query count and
-        # never the answer.  Sourcing it from a plain condition keeps that a
-        # verified property rather than something this line depends on: if H2
-        # ever did change an answer, n_failure would show it instead of hiding
+        # reports the same one: success means the drawn human is representable in
+        # I, a property of the instance rather than of the rule.  Sourcing it from
+        # a plain condition keeps that a verified property — if H2 ever did change
+        # an answer, n_failure would show it instead of hiding
         # it behind the last condition in CONDITIONS.
         if not name.endswith("_h2"):
             success = flag
@@ -516,10 +542,9 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None
 
 # Every t_* and n_* column is a mean over the num_simu repetitions.
 # The t_solve_* columns are per-condition standalone costs, so shared work is
-# added into each of them; t_dominance is that shared piece reported once, on its
-# own, and is therefore *not* a term you may add to a total — summing the
-# t_solve_* columns already counts it four times, deliberately.  It is a column
-# only when H2 runs; without it there is no shared piece to report.
+# added into each of them.  t_dominance is that shared piece reported once on its
+# own, so it is *not* a term to add to a total — the t_solve_* columns already
+# count it four times, deliberately.  It appears only when H2 runs.
 STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans",
                "n_B", "n_B_filter", "n_I", "n_columns"]
 
@@ -546,10 +571,15 @@ def column_layout(use_h2):
                    + (["t_dominance"] if use_h2 else [])
                    + solve_times + sim_times + ["t_total"])
 
-    time_fields = (["game", "size", "num_humans", "num_simu"] + STAGE_SIZES
+    # All three geometry columns are written: "room_side" is what --room-sides
+    # asked for, "board_side" is what actually drives the state count and the run
+    # time, and neither can be recovered from the other without "rooms_per_side".
+    time_fields = (["game", "room_side", "rooms_per_side", "board_side",
+                    "num_humans", "num_simu"] + STAGE_SIZES
                    + stage_times + ["t_total_std", "n_skipped", "skipped"])
 
-    query_fields = (["game", "size", "num_humans", "num_simu", "n_episodes",
+    query_fields = (["game", "room_side", "rooms_per_side", "board_side",
+                     "num_humans", "num_simu", "n_episodes",
                      "n_success", "n_failure"]
                     + [f"{c}_{stat}" for c in conditions
                        for stat in ("mean", "std", "mean_success", "mean_failure")]
@@ -558,40 +588,67 @@ def column_layout(use_h2):
 
 
 def parse_args(argv=None):
+    """The command line, grouped by what each flag decides.
+
+    argparse prints --help in declaration order, so this order is the help screen
+    a reader gets: what to sweep, then the board that sweep is run on, then which
+    conditions are reported, then the cost ceilings, then the odds and ends.
+    Flags that refer to each other are kept adjacent — --room-sides is the side of
+    a room and --rooms-per-side the number of them, and neither means anything
+    without the other.
+    """
     p = argparse.ArgumentParser(
         description="Compare the bottleneck / Query-MDP pipeline across the five games.")
+
+    # ── What to sweep ────────────────────────────────────────────────────────
+    p.add_argument("--games", nargs="+", default=list(ALL_GAMES), choices=list(ALL_GAMES),
+                   help="games to run (default: all five)")
+    p.add_argument("--humans", type=int, nargs="+", default=[3, 5],
+                   help="numbers of candidate human models to sweep; above ~10 most "
+                        "repetitions are skipped for exceeding --max-bottlenecks "
+                        "(default: 3 5)")
     p.add_argument("--num-simu", type=int, default=50,
                    help="repetitions of the whole experiment per combination; every "
                         "reported time and query count is a mean over them "
                         "(default: 50)")
-    p.add_argument("--sizes", type=int, nargs="+", default=[8, 10],
-                   help="grid side lengths to sweep (default: 8 10)")
-    p.add_argument("--humans", type=int, nargs="+", default=[10, 20],
-                   help="numbers of candidate human models to sweep; for Overcooked "
-                        "these are drawn with replacement from the ~10 recipes, so "
-                        "values above 10 are allowed (default: 10 20)")
-    p.add_argument("--games", nargs="+", default=list(ALL_GAMES), choices=list(ALL_GAMES),
-                   help="games to run (default: all five)")
-    p.add_argument("--out-dir", default="results",
-                   help="output folder, created if missing (default: results)")
-    p.add_argument("--seed", type=int, default=0,
-                   help="base seed; each combination is offset from it (default: 0)")
-    # The two caps guard different stages and are deliberately different:
-    # Algorithm 1 is a 2^n DFS (2^18 = 262k subsets, cheap), the exact Query MDP
-    # allocates 3^n knowledge states.  A repetition may therefore clear
-    # Algorithm 1 and still skip the exact solve.
+
+    # ── The board the four grid games are built on ───────────────────────────
+    p.add_argument("--rooms-per-side", type=int, default=3,
+                   help="rooms per side of the board, joined by one-way doors; "
+                        "1 = open board, and |I| = 1 with it (default: 3)")
+    p.add_argument("--room-sides", type=int, nargs="+", default=[3],
+                   help="cells per side of one ROOM, swept; the board is "
+                        "rooms-per-side x this (default: 3)")
+    p.add_argument("--obstacle-density", type=float, default=0.1,
+                   help="obstacle density of the four grid games (default: 0.1)")
+    p.add_argument("--puddle-density", type=float, default=0.2,
+                   help="puddle density, puddleworld only (default: 0.2, "
+                        "matches PuddleWorld's own default)")
+    p.add_argument("--rock-density", type=float, default=0.3,
+                   help="rock density, rockworld only (default: 0.3)")
+
+    # ── Which conditions to report ───────────────────────────────────────────
+    p.add_argument("--h2", action="store_true",
+                   help="also run every rule wearing the H2 dominance mask, "
+                        "doubling the four rule columns to eight (default: off)")
+
+    # ── Cost ceilings ────────────────────────────────────────────────────────
+    # Maintainer's note, deliberately not in the help text below: it is about the
+    # two default *values*, so its reader is whoever edits them.
     #
-    # Both are sized so that Overcooked never skips at the default MDP: measured
-    # over 160 instances (40 seeds x 5/10/20/30 humans) the toboggan filter puts
-    # |B_filter| in 4..17, so 18 and 17 are the observed ceilings.  The price of
-    # the 17 is steep and superlinear — one n=17 solve costs ~29 s and ~4.7 GB
-    # peak, against ~0.08 s at n=13 — so a 20-human sweep spends most of its wall
-    # clock here.  Lower --max-exact-n to trade completed repetitions for speed.
+    # The caps guard different stages: Algorithm 1 is a 2^n DFS (2^18 = 262k
+    # subsets, cheap), the exact Query MDP allocates 3^n knowledge states.  A
+    # repetition can clear Algorithm 1 and still skip the exact solve.
     #
-    # Do not raise --max-exact-n to 18 without testing it alone first: 3^18 is
-    # 3x the states of 3^17, extrapolating to ~14 GB.  And with
-    # --overcooked-allow-drop the filtered set roughly doubles (~36), which no
-    # cap value can bring back into reach of an exact solve.
+    # Both are sized so Overcooked never skips at the default MDP: over 160
+    # instances (40 seeds x 5/10/20/30 humans) the toboggan filter put |B_filter|
+    # in 4..17, so 18 and 17 are the observed ceilings.  The 17 is expensive —
+    # one n=17 solve costs ~29 s and ~4.7 GB peak against ~0.08 s at n=13 — so
+    # lower --max-exact-n to trade completed repetitions for speed.
+    #
+    # Do not raise --max-exact-n to 18 without testing it alone first: 3^18
+    # extrapolates to ~14 GB.  And --overcooked-allow-drop roughly doubles the
+    # filtered set (~36), which no cap value brings back into reach.
     p.add_argument("--max-bottlenecks", type=int, default=18,
                    help="skip a repetition whose bottleneck set exceeds this, "
                         "measured after the toboggan filter; Algorithm 1 is a "
@@ -600,34 +657,30 @@ def parse_args(argv=None):
                    help="skip the exact Query MDP above this many bottlenecks, "
                         "since it allocates 3^n arrays; n=17 costs ~29 s and "
                         "~4.7 GB per repetition (default: 17)")
-    p.add_argument("--obstacles-percent", type=float, default=0.1,
-                   help="obstacle density of the four grid games (default: 0.1)")
-    p.add_argument("--puddle-percent", type=float, default=0.2,
-                   help="puddle density, puddleworld only (default: 0.2, "
-                        "matches PuddleWorld's own default)")
-    p.add_argument("--rock-percent", type=float, default=0.3,
-                   help="rock density, rockworld only (default: 0.3)")
-    p.add_argument("--h2", action="store_true",
-                   help="also run every selection rule wearing the H2 dominance "
-                        "mask, doubling the four rule columns to eight (default: "
-                        "off — the mask is not built and only the rules alone, "
-                        "plus Random, are reported)")
-    p.add_argument("--divide-rooms", action="store_true",
-                   help="use the four-rooms layout, gridworld only")
+
+    # ── Variant, reproducibility, output ─────────────────────────────────────
     p.add_argument("--overcooked-allow-drop", action="store_true",
                    help="use the allow_drop variant of the Overcooked MDP")
+    p.add_argument("--seed", type=int, default=0,
+                   help="base seed; each combination is offset from it (default: 0)")
+    p.add_argument("--out-dir", default="results",
+                   help="output folder, created if missing (default: results)")
     return p.parse_args(argv)
 
 
 # A RockWorld board above this many states is flagged as slow before the sweep
-# starts.  505 is size 8 at the default densities and already costs ~3.4 s per
-# repetition against ~0.08 s for gridworld, so the cut sits just below it and
-# leaves the small boards (size 6 → 281) unflagged.
+# starts.  An 8x8 board is 505 states at the default densities and already costs
+# ~3.4 s per repetition against ~0.08 s for gridworld, so the cut sits just below
+# it and leaves 6x6 (281) unflagged.
 ROCKWORLD_SLOW_STATES = 400
 
 
-def _rockworld_state_estimate(size, rock_percent, valuable_rock_ratio=0.4):
-    """States of one RockWorld board: size^2 positions x 2^k collection sets.
+def _rockworld_state_estimate(board, rock_density, valuable_rock_ratio=0.4):
+    """States of one RockWorld board: board^2 positions x 2^k collection sets.
+
+    ``board`` is the side of the whole grid, *not* the room side that
+    --room-sides sweeps: the rocks are scattered over the entire board, so it is
+    board_side() that drives the state count and therefore the cost.
 
     Mirrors RockWorld.place_rocks and create_state_space — k valuable rocks,
     capped at MAX_VALUABLE_ROCKS, contribute one bit each, and the goal collapses
@@ -635,12 +688,12 @@ def _rockworld_state_estimate(size, rock_percent, valuable_rock_ratio=0.4):
     `valuable_rock_ratio` repeats RockWorld's own default; the experiment never
     overrides it, so it is not exposed on the command line.
     """
-    total_rocks = int(size * size * rock_percent)
+    total_rocks = int(board * board * rock_density)
     k = min(int(total_rocks * valuable_rock_ratio), MAX_VALUABLE_ROCKS)
-    return (size * size - 1) * 2 ** k + 1
+    return (board * board - 1) * 2 ** k + 1
 
 
-def _warn_slow_rockworld(jobs, num_simu, rock_percent):
+def _warn_slow_rockworld(jobs, num_simu, rock_density, rooms_per_side=3):
     """Announce the RockWorld jobs that will crawl, and where on the bar.
 
     Nothing here is at risk of diverging or being skipped: the 2^k collection
@@ -650,9 +703,10 @@ def _warn_slow_rockworld(jobs, num_simu, rock_percent):
     progress bar they occupy is the point — an hour of near-frozen bar in that
     range is expected, not a hang.
     """
-    slow = [i for i, (game, size, _) in enumerate(jobs)
+    slow = [i for i, (game, room_side, _) in enumerate(jobs)
             if game == "rockworld"
-            and _rockworld_state_estimate(size, rock_percent) >= ROCKWORLD_SLOW_STATES]
+            and _rockworld_state_estimate(board_side(rooms_per_side, room_side),
+                                          rock_density) >= ROCKWORLD_SLOW_STATES]
     if not slow:
         return
     # The flagged jobs are contiguous (one game, sizes in order), so first and
@@ -660,12 +714,17 @@ def _warn_slow_rockworld(jobs, num_simu, rock_percent):
     total = len(jobs) * num_simu
     lo = 100.0 * slow[0] * num_simu / total
     hi = 100.0 * (slow[-1] + 1) * num_simu / total
-    boards = sorted({jobs[i][1] for i in slow})
-    sizes = ", ".join(f"{s}x{s} (~{_rockworld_state_estimate(s, rock_percent)} states)"
-                      for s in boards)
+    # Report the board, and the room side that produced it: --room-sides named the
+    # second, but it is the first that sets the state count being warned about.
+    room_sides = sorted({jobs[i][1] for i in slow})
+    sizes = ", ".join(
+        f"{board_side(rooms_per_side, c)}x{board_side(rooms_per_side, c)} boards "
+        f"({rooms_per_side}x{rooms_per_side} rooms of {c}x{c}, "
+        f"~{_rockworld_state_estimate(board_side(rooms_per_side, c), rock_density)} states)"
+        for c in room_sides)
     print(f"warning: rockworld {sizes} should converge, but each repetition "
           f"determinizes every model and runs H3's value iteration over "
-          f"size^2 x 2^{MAX_VALUABLE_ROCKS} states, so they are much slower "
+          f"board^2 x 2^{MAX_VALUABLE_ROCKS} states, so they are much slower "
           f"than the other games — they are {hi - lo:.0f}% of the progress bar, "
           f"from {lo:.0f}% to {hi:.0f}%.")
 
@@ -676,21 +735,34 @@ def main(argv=None):
     conditions, stage_times, time_fields, query_fields = column_layout(args.h2)
 
     # Overcooked has no grid size, so it gets one job per human count; the four
-    # grid domains get the full (size x humans) cross product.
-    jobs = [(g, s, h) for g in args.games if g in GRID_GAMES
-            for s in args.sizes for h in args.humans]
+    # grid domains get the full (room side x humans) cross product.
+    jobs = [(g, c, h) for g in args.games if g in GRID_GAMES
+            for c in args.room_sides for h in args.humans]
     if "overcooked" in args.games:
         jobs += [("overcooked", None, h) for h in args.humans]
 
-    _warn_slow_rockworld(jobs, args.num_simu, args.rock_percent)
+    # State the geometry once, up front: --room-sides names the room, and every
+    # board size printed from here on is the derived one.
+    if any(g in GRID_GAMES for g in args.games):
+        r = args.rooms_per_side
+        boards = ", ".join(f"{board_side(r, c)}x{board_side(r, c)}" for c in args.room_sides)
+        print(f"[geometry] {r}x{r} rooms of {args.room_sides} cells a side "
+              f"-> boards {boards}"
+              + ("  (one room, no walls: the open board)" if r == 1
+                 else f"  ({2 * r * (r - 1)} one-way doors per board)"))
+
+    _warn_slow_rockworld(jobs, args.num_simu, args.rock_density, args.rooms_per_side)
 
     time_rows, query_rows = [], []
     # One tqdm tick per repetition, so the bar reflects the real work: a
     # repetition rebuilds the instance (a fresh random map for the grid games)
     # and re-runs the whole pipeline on it.
     bar = tqdm(total=len(jobs) * args.num_simu, desc="benchmark", unit="rep")
-    for job_idx, (game, size, num_humans) in enumerate(jobs):
-        label = game if size is None else f"{game} {size}x{size}"
+    for job_idx, (game, room_side, num_humans) in enumerate(jobs):
+        # The board, not the room side: it is what the reader of a progress bar
+        # wants, and what every other size in the output refers to.
+        board = None if room_side is None else board_side(args.rooms_per_side, room_side)
+        label = game if board is None else f"{game} {board}x{board}"
         bar.set_postfix_str(f"{label}, {num_humans} humans")
 
         reps, counts_per_rep, successes = [], [], []
@@ -707,11 +779,11 @@ def main(argv=None):
                     num_humans=num_humans, allow_drop=args.overcooked_allow_drop, seed=seed)
             else:
                 instance, t_build = build_grid_instance(
-                    game, size, num_humans, seed=seed,
-                    obstacles_percent=args.obstacles_percent,
-                    puddle_percent=args.puddle_percent,
-                    rock_percent=args.rock_percent,
-                    divide_rooms=args.divide_rooms)
+                    game, room_side, num_humans, seed=seed,
+                    obstacle_density=args.obstacle_density,
+                    puddle_density=args.puddle_density,
+                    rock_density=args.rock_density,
+                    rooms_per_side=args.rooms_per_side)
 
             row, counts, success = run_instance(
                 *instance, max_exact_n=args.max_exact_n,
@@ -725,7 +797,11 @@ def main(argv=None):
             successes.append(success)
             bar.update(1)
 
-        key = {"game": game, "size": "" if size is None else size,
+        # room_side = what --room-sides asked for; board_side = what it built.
+        # Overcooked has neither, so both stay blank for it.
+        key = {"game": game, "room_side": "" if room_side is None else room_side,
+               "rooms_per_side": "" if room_side is None else args.rooms_per_side,
+               "board_side": "" if board is None else board,
                "num_humans": num_humans, "num_simu": args.num_simu}
         time_rows.append(_aggregate_times(key, reps, stage_times))
         query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes,
@@ -831,8 +907,8 @@ def _write_csv(path, fields, rows):
 def _combo_label(row):
     """'gridworld 4x4 (10h)' for a grid game, 'overcooked (10h)' for Overcooked
     (which has no grid size)."""
-    size = row["size"]
-    base = row["game"] if size == "" or pd.isna(size) else f"{row['game']} {int(size)}x{int(size)}"
+    side = row["board_side"]
+    base = row["game"] if side == "" or pd.isna(side) else f"{row['game']} {int(side)}x{int(side)}"
     return f"{base} ({int(row['num_humans'])}h)"
 
 
@@ -866,13 +942,13 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     with_h2 = any(c.endswith("_h2") for c in conditions)
 
     # ── query_counts.png — one subplot per configuration ────────────────────
-    # A configuration is a (size, num_humans) pair; Overcooked has no size and
-    # groups on num_humans alone.  Grid games sharing a pair share a subplot,
+    # A configuration is a (board side, num_humans) pair; Overcooked has no board
+    # and groups on num_humans alone.  Grid games sharing a pair share a subplot,
     # one bar group per game.
     configs, seen = [], set()
     for _, r in df_q.iterrows():
         key = ("overcooked", r["num_humans"]) if r["game"] == "overcooked" \
-              else ("grid", r["size"], r["num_humans"])
+              else ("grid", r["board_side"], r["num_humans"])
         if key not in seen:
             seen.add(key)
             configs.append(key)
@@ -890,10 +966,10 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
             title = f"overcooked — {key[1]} humans"
         else:
             sub = df_q[(df_q["game"] != "overcooked")
-                       & (df_q["size"] == key[1])
+                       & (df_q["board_side"] == key[1])
                        & (df_q["num_humans"] == key[2])]
-            # size arrives as float: Overcooked leaves the column empty, which
-            # makes pandas read the whole column as float.
+            # board_side arrives as float: Overcooked leaves the column empty,
+            # which makes pandas read the whole column as float.
             side  = int(key[1])
             title = f"{side}x{side} grid — {int(key[2])} humans"
 
@@ -913,11 +989,11 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     for ax in flat[len(configs):]:      # unused cells in the last row
         ax.axis("off")
 
-    # One shared legend — nine entries repeated per subplot would eat the axes.
-    # With H2 on, each rule gets ONE entry whose swatch is its light|dark pair, so
-    # the legend has five entries instead of nine and the shade convention is
-    # shown rather than spelled out four times.  Nine flat entries also laid out
-    # badly: a legend fills column-major, so "VI + H2" ended up stacked above
+    # One shared legend — repeating it per subplot would eat the axes.  With H2
+    # on, each rule gets ONE entry whose swatch is its light|dark pair, so the
+    # legend has five entries instead of nine and the shade convention is shown
+    # rather than spelled out.  Nine flat entries also laid out badly: a legend
+    # fills column-major, so "VI + H2" ended up stacked above
     # "H1".  With H2 off the same five entries carry a single swatch each.
     pair_handles = [Patch(facecolor=CONDITION_COLORS["query_all"])]
     pair_labels  = [CONDITION_LABELS["query_all"]]
@@ -988,13 +1064,13 @@ def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
              "proximity": "H3", "frequency": "H4"}
     short.update({f"{b}_h2": f"{short[b]}+2" for b in BASES})
     header = "".join(f"{short[c]:>8}" for c in conditions)
-    print(f"\n{'game':<12}{'size':>5}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
+    print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):
         if q["n_episodes"]:
             queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in conditions)
         else:
             queries = f"{row['skipped']:>{8 * len(conditions)}}"
-        print(f"{row['game']:<12}{str(row['size']):>5}{row['num_humans']:>5}"
+        print(f"{row['game']:<12}{str(row['board_side']):>6}{row['num_humans']:>5}"
               f"{row['n_B_filter']:>7.1f}{queries}{row['t_total']:>10.2f}")
 
 

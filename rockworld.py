@@ -2,9 +2,8 @@
 rockworld.py — RockWorld + determinized-MDP generator.
 ==========================================================
 
-Exported from the *implicitgoals* research repo. Builds on the shared
-``GridWorld`` MDP and ``augment_mdp_to_deterministic`` helper defined in
-``gridworld_core.py`` (the same core used by gridworld.py, puddleworld.py,
+Builds on the shared ``GridWorld`` MDP and ``augment_mdp_to_deterministic``
+helper defined in ``gridworld_core.py`` (the same core used by gridworld.py, puddleworld.py,
 and taxiworld.py — see that module for the shared plumbing).
 
 RockWorld is a GridWorld with valuable rocks (map value ``1``) and dangerous
@@ -25,8 +24,8 @@ entered, ``−5`` for a dangerous one.
 Quick start
 -----------
     from rockworld import generate_determinized_models
-    out = generate_determinized_models(size=4, num_humans=3,
-                                       obstacles_percent=0.1, rock_percent=0.3,
+    out = generate_determinized_models(room_side=4, num_humans=3,
+                                       obstacle_density=0.1, rock_density=0.3,
                                        seed=0)
     T_R, s0, g = out["robot"][:3]
     print(out["total_determinizing_time"])
@@ -38,17 +37,16 @@ from itertools import product
 
 import numpy as np
 
-from gridworld_core import GridWorld, augment_mdp_to_deterministic
+from gridworld_core import GridWorld, augment_mdp_to_deterministic, board_side
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RockWorld (ported from RockWorldClass.py)
+# RockWorld
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Collected rocks live in the state, so each valuable rock doubles the state
-# space.  The cap keeps that exponential in check: at the default sweep size 8 an
-# uncapped board carries 7 valuable rocks (128x the states, ~86 s to determinize
-# a single model), which makes the experiment infeasible.  3 rocks is 8x.
+# space.  The cap keeps that exponential in check: the default 9x9 board carries
+# 9 valuable rocks uncapped, which is 512x the states.  3 rocks is 8x.
 MAX_VALUABLE_ROCKS = 3
 
 
@@ -59,21 +57,24 @@ class RockWorld(GridWorld):
 
     A state is ``[position, collected]``, where ``collected`` is one bit per
     valuable rock (in ``valuable_positions`` order).  Carrying that set in the
-    state is what makes "each rock pays once" Markov: the old implementation
-    mutated ``self.map`` inside the reward to remember, which corrupted the map
-    and made the reward depend on evaluation order.
+    state is what makes "each rock pays once" Markov.  Recording it by mutating
+    ``self.map`` from inside the reward would corrupt the map and make the reward
+    depend on evaluation order.
     """
 
-    def __init__(self, size=5, start=None, goal=None, obstacles_percent=0.1,
-                 rock_percent=0.3, valuable_rock_ratio=0.4,
+    def __init__(self, start=None, goal=None, obstacle_density=0.1,
+                 rock_density=0.3, valuable_rock_ratio=0.4,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
                  slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1,
-                 max_valuable_rocks=MAX_VALUABLE_ROCKS):
-        super().__init__(size=size, start=start, goal=goal,
-                         obstacles_percent=obstacles_percent,
+                 max_valuable_rocks=MAX_VALUABLE_ROCKS,
+                 rooms_per_side=1, room_side=5):
+        super().__init__(start=start, goal=goal,
+                         obstacle_density=obstacle_density,
                          slip_prob=slip_prob, discount=discount,
-                         max_tries=max_tries, obstacle_seed=obstacle_seed)
-        self.rock_percent = rock_percent
+                         max_tries=max_tries, obstacle_seed=obstacle_seed,
+                         rooms_per_side=rooms_per_side,
+                         room_side=room_side)
+        self.rock_density = rock_density
         self.valuable_rock_ratio = valuable_rock_ratio
         self.valuable_rock_reward = valuable_rock_reward
         self.dangerous_rock_penalty = dangerous_rock_penalty
@@ -97,8 +98,8 @@ class RockWorld(GridWorld):
         """
         k = len(getattr(self, "valuable_positions", []))
         self.state_space = []
-        for i in range(self.size):
-            for j in range(self.size):
+        for i in range(self.board_side):
+            for j in range(self.board_side):
                 if (i, j) == self.goal_pos:
                     self.state_space.append([(i, j), (0,) * k])
                 else:
@@ -118,7 +119,7 @@ class RockWorld(GridWorld):
 
     # ── Rocks ────────────────────────────────────────────────────────────────
     def place_rocks(self):
-        total_rocks = int(self.size * self.size * self.rock_percent)
+        total_rocks = int(self.board_side * self.board_side * self.rock_density)
         valuable_rocks = min(int(total_rocks * self.valuable_rock_ratio),
                              self.max_valuable_rocks)
         dangerous_rocks = total_rocks - valuable_rocks
@@ -133,13 +134,15 @@ class RockWorld(GridWorld):
     def place_rock(self, rock_type):
         """Drop a rock on a free cell, or return None when the board is full.
 
-        Start and goal are excluded: a rock on the goal could never be collected
-        (entering the goal collapses the collection set), and the old unbounded
-        ``while True`` spun for ever on a board with no free cell left.
+        Everything in ``protected_cells()`` is excluded — start and goal, plus
+        whatever a subclass adds: a rock on the goal could never be collected,
+        since entering the goal collapses the collection set.  Drawing from the
+        free list, rather than retrying until a free cell turns up, is what makes
+        a full board return None instead of looping for ever.
         """
-        free = [(x, y) for x in range(self.size) for y in range(self.size)
-                if self.map[x, y] == 0
-                and (x, y) != self.start_pos and (x, y) != self.goal_pos]
+        protected = self.protected_cells()
+        free = [(x, y) for x in range(self.board_side) for y in range(self.board_side)
+                if self.map[x, y] == 0 and (x, y) not in protected]
         if not free:
             return None
         x, y = free[self.rng.randint(len(free))]
@@ -184,46 +187,49 @@ class RockWorld(GridWorld):
     def get_goal_states(self):
         return [[self.goal_pos, (0,) * len(self.valuable_positions)]]
 
-    def visualize(self):
-        for i in range(self.size):
-            row = ""
-            for j in range(self.size):
-                if self.map[i, j] == -1:
-                    row += "# "
-                elif self.map[i, j] == 1:
-                    row += "V "
-                elif self.map[i, j] == 2:
-                    row += "D "
-                elif (i, j) == self.start_pos:
-                    row += "S "
-                elif (i, j) == self.goal_pos:
-                    row += "G "
-                else:
-                    row += ". "
-            print(row)
+    CHAR_STYLE = {**GridWorld.CHAR_STYLE,
+                   "V": ("#fdd835", "#4e342e"),      # valuable rock: worth +10
+                   "D": ("#e53935", "#ffffff")}      # dangerous rock: costs -5
+
+    def cell_char(self, i, j):
+        """``V`` valuable rock, ``D`` dangerous one; the rest as in a plain grid."""
+        if self.map[i, j] == 1:
+            return "V"
+        if self.map[i, j] == 2:
+            return "D"
+        return super().cell_char(i, j)
 
 
-def generate_and_visualize_rockworld(size, start, goal, obstacles_percent, rock_percent,
-                                     model_type="Model", obstacle_seed=None):
-    """Generate a ``RockWorld`` (mirrors the function in experiments.py)."""
-    return RockWorld(size=size, start=start, goal=goal,
-                     obstacles_percent=obstacles_percent,
-                     rock_percent=rock_percent,
-                     obstacle_seed=obstacle_seed)
+def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density,
+                                     model_type="Model", obstacle_seed=None,
+                                     rooms_per_side=1, room_side=5):
+    """Generate a ``RockWorld``."""
+    return RockWorld(start=start, goal=goal,
+                     obstacle_density=obstacle_density,
+                     rock_density=rock_density,
+                     obstacle_seed=obstacle_seed,
+                     rooms_per_side=rooms_per_side,
+                     room_side=room_side)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # High-level driver — robot + N humans, with compute timing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_determinized(size, obstacles_percent, rock_percent, model_type, visualize=False):
+def _make_determinized(obstacle_density, rock_density, model_type, visualize=False,
+                       rooms_per_side=1, room_side=5):
     """Generate one rock world and determinize it; returns (next_states, s0, g, det_time).
 
-    If ``visualize`` is True, print the generated map before determinizing.
+    The two corners are derived from the same board the grid will build, so they
+    cannot name a cell that is off it.  If ``visualize`` is True, print the
+    generated map before determinizing.
     """
+    n = board_side(rooms_per_side, room_side)
     mdp = generate_and_visualize_rockworld(
-        size=size, start=(0, 0), goal=(size - 1, size - 1),
-        obstacles_percent=obstacles_percent, rock_percent=rock_percent,
+        start=(0, 0), goal=(n - 1, n - 1),
+        obstacle_density=obstacle_density, rock_density=rock_density,
+        rooms_per_side=rooms_per_side,
+        room_side=room_side,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -235,17 +241,21 @@ def _make_determinized(size, obstacles_percent, rock_percent, model_type, visual
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 
-def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
-                                 rock_percent=0.3, seed=None, verbose=True,
-                                 visualize=False):
+def generate_determinized_models(num_humans=3, obstacle_density=0.1,
+                                 rock_density=0.3, seed=None, verbose=True,
+                                 visualize=False, rooms_per_side=1, room_side=4):
     """Build a robot model + ``num_humans`` human RockWorld models and determinize each.
 
     Parameters
     ----------
-    size : int              grid side length
     num_humans : int        number of human models
-    obstacles_percent : float   obstacle density in [0, 1]
-    rock_percent : float    rock density in [0, 1]
+    obstacle_density : float   obstacle density in [0, 1]
+    rock_density : float    rock density in [0, 1]
+    rooms_per_side : int    rooms along each side of the board; 1 is the open
+                            board, one room and no walls
+    room_side : int         cells along each side of one room, so the board is
+                            ``rooms_per_side * room_side`` — walls are thin, and
+                            no cell is spent on them
     seed : int or None      seeds ``random``/``numpy`` for reproducibility
     verbose : bool          print a short timing summary
     visualize : bool        print each generated map (robot + humans)
@@ -259,16 +269,25 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
         random.seed(seed)
         np.random.seed(seed)
 
-    robot = _make_determinized(size, obstacles_percent, rock_percent, "Robot Model", visualize)
-    humans = [_make_determinized(size, obstacles_percent, rock_percent, f"Human Model {i + 1}", visualize)
+    robot = _make_determinized(obstacle_density, rock_density, "Robot Model", visualize,
+                               rooms_per_side=rooms_per_side,
+                               room_side=room_side)
+    humans = [_make_determinized(obstacle_density, rock_density, f"Human Model {i + 1}",
+                                 visualize, rooms_per_side=rooms_per_side,
+                                 room_side=room_side)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
     total = float(sum(det_times))
 
     if verbose:
-        print(f"[rockworld] size={size} obstacles={obstacles_percent} "
-              f"rocks={rock_percent} humans={len(humans)}")
+        size = board_side(rooms_per_side, room_side)
+        geometry = (f"{size}x{size} open board" if rooms_per_side == 1 else
+                    f"{size}x{size} board = {rooms_per_side}x{rooms_per_side} rooms "
+                    f"of {room_side}x{room_side}")
+        print(f"[rockworld] {geometry}, {size * size} cells, "
+              f"obstacles={obstacle_density} rocks={rock_density} "
+              f"humans={len(humans)}")
         print(f"  robot: {robot[0].shape[0]} states x {robot[0].shape[1]} actions "
               f"(determinized in {robot[3]:.4f}s)")
         print(f"  total determinizing time: {total:.4f}s")
@@ -283,8 +302,8 @@ def generate_determinized_models(size=4, num_humans=3, obstacles_percent=0.1,
 
 
 if __name__ == "__main__":
-    out = generate_determinized_models(size=4, num_humans=3,
-                                       obstacles_percent=0.1, rock_percent=0.3, seed=0, visualize=True)
+    out = generate_determinized_models(room_side=4, num_humans=3,
+                                       obstacle_density=0.1, rock_density=0.3, seed=0, visualize=True)
     T_R, s0, g, _ = out["robot"]
     print("\nRobot determinized transition array shape:", T_R.shape)
     print("start index:", s0, " goal index:", g)

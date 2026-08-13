@@ -2,7 +2,6 @@
 minigridworld.py — MiniGrid-style Unlock / UnlockPickup + determinized-MDP generator.
 =========================================================================================
 
-Exported from the *implicitgoals* research repo (ported from MinigridWorldClass.py).
 Builds on ``augment_mdp_to_deterministic`` from ``gridworld_core.py`` (the same
 core used by gridworld.py, puddleworld.py, rockworld.py, and taxiworld.py) —
 but UnlockEnv/UnlockPickupEnv do NOT subclass GridWorld. Their state is
@@ -51,7 +50,7 @@ from gridworld_core import augment_mdp_to_deterministic
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UnlockEnv (ported from MinigridWorldClass.py)
+# UnlockEnv
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UnlockEnv:
@@ -173,7 +172,7 @@ class UnlockEnv:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UnlockPickupEnv (ported from MinigridWorldClass.py)
+# UnlockPickupEnv
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UnlockPickupEnv:
@@ -242,10 +241,9 @@ class UnlockPickupEnv:
         elif action == "forward":
             dx, dy = [(0, -1), (1, 0), (0, 1), (-1, 0)][direction]
             new_x, new_y = x + dx, y + dy
-            # NOTE: collides against the *current* ball position from `state`
-            # (fixed from the original MinigridWorldClass.py, which checked
-            # self.ball_pos — the ball's fixed starting position — even after
-            # the ball had been pushed elsewhere).
+            # Collides against the *current* ball position from `state`, not
+            # self.ball_pos: the ball moves when pushed, so its starting cell
+            # stops being where it is.
             if self.is_valid_position(new_x, new_y) and (new_x, new_y) != ball_pos:
                 transitions[((new_x, new_y), direction, door_state, has_key, has_box, ball_pos)] = 1 - self.slip_prob
             else:
