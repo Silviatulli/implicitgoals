@@ -469,7 +469,11 @@ class GridWorld:
                     gap += self.wall_char((i, j), (i + 1, j))
                     if j + 1 < self.board_side:
                         gap += " "
-                print(gap)
+                # Only the row boundaries that carry a wall get a line.  Between
+                # two rows inside the same room every crossing is open, so the
+                # line would be blank and would only stretch the board.
+                if gap.strip():
+                    print(gap)
 
     # ── Image rendering ──────────────────────────────────────────────────────
     # One entry per character cell_char() can return: (fill colour, text colour).

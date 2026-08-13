@@ -953,7 +953,11 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
             seen.add(key)
             configs.append(key)
 
-    ncols = min(3, len(configs))
+    # Three across at most, except four, which goes 2x2 rather than 3+1 with two
+    # blanks.  Four is the count the default sweep produces, and the only one
+    # under nine where "three across" is the wrong answer: 3, 6 and 9 fill their
+    # rows exactly, and 5, 7 and 8 leave blanks whatever the width.
+    ncols = 2 if len(configs) == 4 else min(3, len(configs))
     nrows = int(np.ceil(len(configs) / ncols))
     fig, axes = plt.subplots(nrows, ncols, squeeze=False,
                              figsize=(6.5 * ncols, 4.6 * nrows))
@@ -1029,9 +1033,8 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     # more than two orders of magnitude (~38k states on paper, a few hundred
     # reachable), which is exactly what makes building T_R_sto affordable.
     axes[0, 0].bar(x_t, df_t["n_reachable"], color="darkorange")
-    axes[0, 0].set_yscale("log")
-    axes[0, 0].set_ylabel("n_reachable (log scale)")
-    axes[0, 0].set_title("States reachable from the start — the value-iteration matrix")
+    axes[0, 0].set_ylabel("n_reachable")
+    axes[0, 0].set_title("State space reachable from the start")
     _rotate_xticks(axes[0, 0], labels_t, x_t)
 
     axes[0, 1].bar(x_t, df_t["n_I"], color="mediumseagreen")
@@ -1040,8 +1043,8 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     _rotate_xticks(axes[0, 1], labels_t, x_t)
 
     axes[1, 0].bar(x_t, df_t["n_B_filter"], color="steelblue")
-    axes[1, 0].set_ylabel("|B_filter|")
-    axes[1, 0].set_title("Problem size (bottlenecks after toboggan filter)")
+    axes[1, 0].set_ylabel("|B|")
+    axes[1, 0].set_title("Problem size")
     _rotate_xticks(axes[1, 0], labels_t, x_t)
 
     axes[1, 1].bar(x_t, df_t["t_total"], color="indianred")
