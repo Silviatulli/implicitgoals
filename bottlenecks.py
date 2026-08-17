@@ -849,6 +849,14 @@ def value_iteration(T_R_sto, goal_state, reward_function=None,
                     gamma=0.99, tol=1e-10, max_iter=10_000):
     """V_R: the robot's optimal state value under M_R.
 
+    DEAD CODE — nothing in the pipeline calls this any more.  It fed H3, which
+    now ranks bottlenecks by Euclidean distance to the goal and needs no value at
+    all (see solve_query_mdp_proximity).  It is kept rather than deleted because
+    it still works and is the obvious starting point if a value-based condition
+    is ever wanted again; its partner builders, gridworld_core and
+    overcooked_env's build_stochastic_matrix, are kept for the same reason.
+    Nothing exercises it, so treat it as untested from here on.
+
     Two modes, chosen by whether a reward function is supplied.
 
     Reward mode (reward_function given).  Standard value iteration driven by the
@@ -1036,59 +1044,98 @@ def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 
 def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None,
-                              V_R=None, state_index=None):
-    """Hypothesis 3 — query bottlenecks in decreasing V_R, the robot's optimal
-    state value under M_R.
+                              positions=None, goal_state=None):
+    """Hypothesis 3 — three tiers, with Euclidean proximity inside the middle one.
 
-    What V_R *measures* depends on which mode value_iteration ran in, and H3 does
-    not care.  Reward mode (the grid games, which carry a reward function) makes
-    it a discounted return, on whatever scale that game's reward uses; probability
-    mode (Overcooked, which has no reward object) makes it the discounted
-    probability of reaching the goal, in [0, 1].  Only the *ordering* is read, so
-    no absolute scale is assumed anywhere below — see the +inf note.
+    Distance alone is not the rule, because most bottlenecks are not worth asking
+    about at all.  Split B by how many hypotheses hold a bottleneck:
 
-    state_index is the second return value of build_stochastic_matrix() — it maps
-    a raw state ID to its row in the pruned T_R_sto — and V_R is what
-    value_iteration() returns for that same T_R_sto, so V_R is
-    indexed by pruned row.  Time the builder and the value iteration together
-    with this call: both are part of H3's cost, not a free precomputation.
+      1. **in no I_k** — asked first.  It belongs to no achievable subset, so a
+         YES proves the human's subgoal set is outside I: failure, found at once
+         instead of after the whole budget.  A NO is needed before any hypothesis
+         can be certified, so the query is never wasted either way.
+      2. **in some but not all** — the only tier where the answer discriminates,
+         and the only place the geometry is used: nearest the goal first, by
+         straight-line distance.
+      3. **in every I_k** — asked last, which in practice means never.  The oracle
+         cannot say anything that moves either terminal test: a YES leaves I_hat
+         untouched, and K_I stays inside every I_k so no failure can trigger.
+         goal_state lives here, being a bottleneck of every model — which is what
+         stops H3 from spending its first query on the goal, as a pure distance
+         ranking does (distance 0 is the smallest there is).
 
-    A bottleneck missing from state_index is unreachable under M_R.  It is asked
-    **first**: no achievable subset can contain it, so it belongs to no
-    hypothesis, and a YES on it proves the human's subgoal set lies outside I —
-    failure, detected immediately instead of after the whole budget is spent.
+    Tier 3 is never reached because the episode always ends first: once every
+    bottleneck outside tier 3 is answered, either the YES bits all sit in one I_k
+    (success, since the tier-3 bits are in that I_k by definition) or they do not
+    (failure).  Ranking rather than removing keeps the action set equal to B, so
+    the bit order still matches I_array and every other condition.
+
+    Straight-line means straight-line: walls, one-way doors and obstacles are
+    ignored inside tier 2, so two cells either side of a sealed wall can rank as
+    neighbours.  That is the definition, not an oversight — a graph distance
+    would respect them, and is a different hypothesis.
+
+    The tiers come from I, the full hypothesis space, and are fixed for the
+    episode; H3 does not re-derive them from the consistent set as H1 and H4 do.
+
+    Parameters
+    ----------
+    positions : dict {raw state ID -> coordinate tuple}
+        Where each state sits.  For the grid games that is
+        ``{i: tuple(s[0]) for i, s in enumerate(mdp.get_state_space())}``, since
+        ``state[0]`` is the (row, col) position in every grid world.  Any number
+        of dimensions works; the norm does not care.
+    goal_state : int
+        Raw state ID of the goal, so its coordinate can be looked up here.
+
+    A game with no geometry — Overcooked, whose states are bit-packed inventory /
+    pot pairs — has no `positions` to pass and therefore no H3.  The caller skips
+    the condition rather than inventing coordinates for it.
     """
     unique_B, B_to_idx = _bit_order(I, B)
-    if V_R is None or state_index is None:
+    if positions is None or goal_state is None:
         raise ValueError(
-            "solve_query_mdp_proximity needs both V_R and state_index: "
-            "T_R_sto, state_index, *rest = build_stochastic_matrix(...) and "
-            "then V_R = value_iteration(T_R_sto, state_index[goal], *rest).  "
-            "The *rest absorbs the grid builder's (reward_function, states, "
-            "actions) and is empty for Overcooked's, which is exactly the "
-            "difference between reward mode and probability mode.")
-    V_R = np.asarray(V_R, dtype=np.float64)
+            "solve_query_mdp_proximity needs `positions` and `goal_state`: a map "
+            "from raw state ID to coordinate, and the goal's ID.  For a grid "
+            "world, positions = {i: tuple(s[0]) for i, s in "
+            "enumerate(mdp.get_state_space())}.")
     if not all(isinstance(b, (int, np.integer)) for b in unique_B):
-        raise ValueError("state_index is keyed by raw state ID, so B must be "
-                         "raw state IDs, not decoded tuples.")
-    # Two tiers, unconditionally: every bottleneck the robot cannot reach is
-    # asked before any bottleneck it can, and only inside the second tier does
-    # V_R decide the order.
-    #
-    # This is not a tie-breaking nicety, it is where the questions are.  A
-    # bottleneck unreachable in M_R sits in no achievable subset, so B \ I is
-    # exactly the unreachable set, and success requires a NO on every bottleneck
-    # outside the chosen hypothesis.  Asking them first is never wasted.
-    #
-    # +inf rather than a value derived from V_R: V_R's range moves with the game
-    # and the board (roughly [-45, +17] on rockworld, [0, 1] on gridworld), so
-    # any finite sentinel would drift between "first" and "last".  Queried
-    # actions are masked to -1e9 by the caller, so +inf is safe here.
-    score = np.array([V_R[state_index[b]] if b in state_index else np.inf
-                      for b in unique_B])
-    return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
-                      unique_B, B_to_idx, rule="static", static_score=score)
+        raise ValueError("positions is keyed by raw state ID, so B must be raw "
+                         "state IDs, not decoded tuples.")
+    if int(goal_state) not in positions:
+        raise ValueError(f"goal_state {int(goal_state)} has no position.")
+    missing = [b for b in unique_B if b not in positions]
+    if missing:
+        # Every state of a grid world owns a cell, so this means `positions` was
+        # built against a different state space than B was.  Raise instead of
+        # ranking the odd ones out by a sentinel, which would hide the mismatch.
+        raise ValueError(
+            f"{len(missing)} bottleneck(s) have no position: "
+            f"{missing[:5]}{'...' if len(missing) > 5 else ''}")
 
+    T = _hypothesis_matrix(I, B_to_idx)          # (len(I), n) bool
+    in_none = ~T.any(0)
+    # `and len(I)` matters: with no hypotheses at all, all(0) over zero rows is
+    # vacuously True everywhere, which would put every bottleneck in tier 3 and
+    # ask about none of them.  With I empty they are all in no hypothesis.
+    in_all = T.all(0) & bool(len(I))
+
+    goal_pos = np.asarray(positions[int(goal_state)], dtype=np.float64)
+    dist = np.array([
+        float(np.linalg.norm(np.asarray(positions[b], dtype=np.float64) - goal_pos))
+        for b in unique_B])
+
+    # Tier offsets, sized off the data rather than fixed: one span is wider than
+    # any distance on this board, so the three bands cannot overlap however large
+    # the board gets.  Finite on purpose — evaluate_policy_on_real_human masks
+    # already-queried actions to -1e9, so a -inf tier would rank *below* them and
+    # the argmax would re-query a spent bottleneck.
+    span = float(dist.max()) + 1.0 if dist.size else 1.0
+    tier = np.where(in_none, 1.0, np.where(in_all, -1.0, 0.0))
+    # Negated distance so that, inside a tier, nearest the goal is asked first.
+    score = span * tier - dist
+    return GreedyQNet(len(unique_B), T, unique_B, B_to_idx,
+                      rule="static", static_score=score)
 
 def build_dominance(I, B):
     """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G, where

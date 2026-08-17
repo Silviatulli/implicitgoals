@@ -19,6 +19,8 @@ R * C cells per side, nothing is spent on the walls, and a door is an *edge*: yo
 stand west of a door, step right, and you are in the next room, never standing in
 the door itself.  The default R=3, C=3 is a 9x9 board of nine 3x3 rooms, and
 --rooms-per-side 1 is the degenerate case: one room, no walls, an open C x C board.
+The defaults are R=5, C=5 — a 25x25 board of twenty-five 5x5 rooms, with 40
+one-way doors.
 
 Every wall between two neighbouring rooms carries exactly one door, and it is
 **one-way** — east or south only — sitting at the middle of that wall.  Doors are
@@ -33,7 +35,8 @@ bottleneck and come back, so Algorithm 1 always finds exactly one maximally
 achievable subset — |I| = 1 whatever the obstacle layout.  One-way doors make the
 room grid a DAG: stepping through a door commits, the doors of the routes not
 taken become unreachable, and |I| grows to the number of monotone routes through
-the room grid (up to 6 for 3x3, 20 for 4x4).
+the room grid: C(2(R-1), R-1), so 6 for 3x3, 20 for 4x4 and 70 for the default
+5x5.
 
 --humans is bounded by the same 2^|B| cost, since B_nofilter is the union over
 the humans.  An instance that busts --max-bottlenecks is no longer skipped: it is
@@ -96,11 +99,8 @@ from overcooked_env import (
     serving_matrices_nomove,
     # encoding constants
     CLIENT_SERVED,
-    # the robot's stochastic model, pruned to the reachable states — Hypothesis 3
-    build_stochastic_matrix as overcooked_stochastic_matrix,
 )
-from gridworld_core import (build_stochastic_matrix as grid_stochastic_matrix,
-                            board_side, status_line, set_status_sink,
+from gridworld_core import (board_side, status_line, set_status_sink,
                             RETRY_REPORT_EVERY)
 # Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
 # directly instead of a stochastic MDP to determinize: there is no
@@ -122,7 +122,7 @@ from bottlenecks import (
     solve_query_mdp_proximity,
     solve_query_mdp_frequency,
     build_dominance,
-    value_iteration,
+    get_reachable_states,
     evaluate_policy_on_real_human,
 )
 
@@ -226,8 +226,8 @@ def build_grid_instance(game, room_side, num_humans, seed=None, obstacle_density
 
     T_R, start_state, goal_state, _ = out["robot"]
     T_H_list = [h[0] for h in out["humans"]]
-    # Deferred, not built here: Hypothesis 3 is timed with its own value
-    # iteration included, so the stochastic model is built inside that timer.
+    # The MDP object travels with the instance: Hypothesis 3 reads its state
+    # space to get each state's (row, col) cell.
     return (T_R, T_H_list, start_state, goal_state, out["robot_mdp"]), build_time
 
 
@@ -406,11 +406,10 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                  max_exact_n=17, filter_toboggans=False, max_bottlenecks=17,
                  use_h2=False, bottleneck_bundle=None):
-    # mdp_R feeds Hypothesis 3's value iteration:
-    #   * a robot MDP object (grid games) → reward-driven V_R;
-    #   * None (Overcooked, which has no MDP object) → the stochastic matrix is
-    #     built from the raw next-state matrix T_R and V_R is goal-reaching
-    #     probability.
+    # mdp_R is what Hypothesis 3 reads coordinates out of:
+    #   * a robot MDP object (grid games) → state[0] is the cell, so H3 ranks
+    #     bottlenecks by Euclidean distance to the goal;
+    #   * None (Overcooked, which has no MDP object and no geometry) → no H3.
     """Run the whole pipeline once on one instance and time every stage.
 
     The Query MDP has two distinct inputs, and they are not the same set:
@@ -454,11 +453,11 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         time.  When False, Algorithm 1 runs on the unfiltered union, `n_B` equals
         `n_B_nofilter` and `t_toboggan_filter` is NaN to mark the stage as not run.
 
-    sto_builder : callable or None
-        Zero-argument builder returning (T_R_sto, index) — the robot's stochastic
-        model pruned to its reachable states, plus the map from state ID to row.
-        Called *inside* the Proximity timer, because Hypothesis 3's cost includes
-        the value iteration it depends on.  None means H3 is skipped (NaN).
+    mdp_R : MDP object or None
+        The robot's un-determinized model.  Hypothesis 3 reads its state space
+        for each state's cell; None (Overcooked) means H3 is skipped and its
+        columns are NaN, since Euclidean proximity needs a geometry the game
+        does not have.
 
     use_h2 : bool
         Add the "+ H2" twin of every selection rule.  Off by default: the
@@ -487,11 +486,15 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         [f"t_solve_{c}" for c in conditions if c != "query_all"] + \
         [f"t_sim_{c}" for c in conditions]
 
-    # n_reachable is filled in by the Proximity stage below — it is the side of
-    # the matrix H3's value iteration actually runs on.  Seeded NaN here so every
-    # early return carries the column without repeating the assignment.
+    # n_reachable: how much of the state space the robot can actually get to,
+    # against n_states, which is how big the game is on paper (161 against 38 417
+    # for Overcooked).  A BFS over the determinized matrix, so it costs nothing
+    # and every early return below already carries the column.  It used to fall
+    # out of the stochastic matrix H3 built; H3 no longer builds one.
     row: dict = {"n_states": int(T_R.shape[0]), "n_actions": int(T_R.shape[1]),
-                 "n_humans": len(T_H_list), "n_reachable": float("nan")}
+                 "n_humans": len(T_H_list),
+                 "n_reachable": int(get_reachable_states(
+                     np.asarray(T_R), int(start_state)).sum())}
 
     # Normally precomputed: main() has to know |B| *before* it accepts an
     # instance, so it runs these three stages itself and hands the result down
@@ -575,30 +578,30 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
             policies[name] = solver(I, B, oracle=oracle)
         base_solve[name] = time.perf_counter() - t0
 
-    # Proximity carries its own value iteration: H3 depends on V_R, so building
-    # the stochastic model and solving it is part of H3's cost, not a free
-    # precomputation hoisted out of the timer.
+    # Proximity is a coordinate lookup and a norm — H3 ranks bottlenecks by
+    # Euclidean distance to the goal, so there is no model to build and no value
+    # iteration to time.  What used to sit in this timer was an O(|S|^2 |A|)
+    # stochastic-matrix build plus a value iteration, and it was the dominant
+    # cost of the whole H3 stage.
     t0 = time.perf_counter()
     with _quiet():
         if mdp_R is not None:
-            # Grid games pass their robot MDP → reward-driven value iteration.
-            T_R_sto, sto_index, reward_function, states, actions = \
-                grid_stochastic_matrix(mdp_R)
-            V_R = value_iteration(T_R_sto, sto_index[int(goal_state)],
-                                  reward_function, states, actions)
+            # state[0] is the (row, col) cell in every grid world, and
+            # augment_mdp_to_deterministic indexes states in get_state_space()
+            # order, so the raw bottleneck IDs address this list directly.
+            positions = {i: tuple(s[0])
+                         for i, s in enumerate(mdp_R.get_state_space())}
+            policies["proximity"] = solve_query_mdp_proximity(
+                I, B, oracle=oracle, positions=positions,
+                goal_state=int(goal_state))
         else:
-            # No MDP object (Overcooked): build the stochastic matrix straight
-            # from the raw next-state matrix T_R; V_R is the goal-reaching
-            # probability. Built here, inside the timer, on purpose.
-            T_R_sto, sto_index = overcooked_stochastic_matrix(
-                np.asarray(T_R, dtype=np.int64), int(start_state))
-            V_R = value_iteration(T_R_sto, sto_index[int(goal_state)])
-        policies["proximity"] = solve_query_mdp_proximity(
-            I, B, oracle=oracle, V_R=V_R, state_index=sto_index)
-    base_solve["proximity"] = time.perf_counter() - t0
-    # The pruned side of T_R_sto: how big the value iteration really was, as
-    # against n_states, which is how big the game's state space is on paper.
-    row["n_reachable"] = int(T_R_sto.shape[0])
+            # Overcooked has no geometry — a state is a bit-packed (inventory,
+            # pot) pair, not a place — so Euclidean proximity is undefined and
+            # the game simply has no H3 column.  None flows through the same
+            # path as a skipped VI baseline below, giving NaN.
+            policies["proximity"] = None
+    base_solve["proximity"] = (float("nan") if policies["proximity"] is None
+                               else time.perf_counter() - t0)
 
     # H2's mask — computed once, charged to each column that wears it.  Not built
     # at all when no column wears it.
@@ -735,24 +738,25 @@ def parse_args(argv=None):
     # ── What to sweep ────────────────────────────────────────────────────────
     p.add_argument("--games", nargs="+", default=list(ALL_GAMES), choices=list(ALL_GAMES),
                    help="games to run (default: all five)")
-    p.add_argument("--humans", type=int, nargs="+", default=[3, 5],
-                   help="numbers of candidate human models to sweep; above ~10 most "
-                        "repetitions are skipped for exceeding --max-bottlenecks "
-                        "(default: 3 5)")
+    p.add_argument("--humans", type=int, nargs="+", default=[12, 16, 20],
+                   help="numbers of candidate human models to sweep; B is their "
+                        "union, so more humans means a bigger query set and more "
+                        "instances redrawn for exceeding --max-bottlenecks "
+                        "(default: 12 16 20)")
     p.add_argument("--num-simu", type=int, default=50,
                    help="repetitions of the whole experiment per combination; every "
                         "reported time and query count is a mean over them "
                         "(default: 50)")
 
     # ── The board the four grid games are built on ───────────────────────────
-    p.add_argument("--rooms-per-side", type=int, default=3,
+    p.add_argument("--rooms-per-side", type=int, default=5,
                    help="rooms per side of the board, joined by one-way doors; "
-                        "1 = open board, and |I| = 1 with it (default: 3)")
-    p.add_argument("--room-sides", type=int, nargs="+", default=[3],
+                        "1 = open board, and |I| = 1 with it (default: 5)")
+    p.add_argument("--room-sides", type=int, nargs="+", default=[5],
                    help="cells per side of one ROOM, swept; the board is "
-                        "rooms-per-side x this (default: 3)")
-    p.add_argument("--obstacle-density", type=float, default=0.1,
-                   help="obstacle density of the four grid games (default: 0.1)")
+                        "rooms-per-side x this (default: 5, so a 25x25 board)")
+    p.add_argument("--obstacle-density", type=float, default=0.05,
+                   help="obstacle density of the four grid games (default: 0.05)")
     p.add_argument("--puddle-density", type=float, default=0.2,
                    help="puddle density, puddleworld only (default: 0.2, "
                         "matches PuddleWorld's own default)")
@@ -843,7 +847,7 @@ def _warn_slow_rockworld(jobs, num_simu, rock_density, rooms_per_side=3):
 
     Nothing here is at risk of diverging or being skipped: the 2^k collection
     bits simply multiply the state space that both the determinized build and
-    Hypothesis 3's value iteration walk, so those jobs run an order of magnitude
+    the determinized build walks, so those jobs run an order of magnitude
     slower per repetition than the plain grids.  Printing the slice of the
     progress bar they occupy is the point — an hour of near-frozen bar in that
     range is expected, not a hang.
@@ -868,8 +872,8 @@ def _warn_slow_rockworld(jobs, num_simu, rock_density, rooms_per_side=3):
         f"~{_rockworld_state_estimate(board_side(rooms_per_side, c), rock_density)} states)"
         for c in room_sides)
     print(f"warning: rockworld {sizes} should converge, but each repetition "
-          f"determinizes every model and runs H3's value iteration over "
-          f"board^2 x 2^{MAX_VALUABLE_ROCKS} states, so they are much slower "
+          f"determinizes every model over board^2 x 2^{MAX_VALUABLE_ROCKS} "
+          f"states, so they are much slower "
           f"than the other games — they are {hi - lo:.0f}% of the progress bar, "
           f"from {lo:.0f}% to {hi:.0f}%.")
 
@@ -1094,7 +1098,7 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
                         one shared axis because the configurations differ by an
                         order of magnitude in |B|, and a shared y-axis
                         flattens the small ones into indistinguishable stubs.
-    compute_times.png  2x2 grid: the value iteration's matrix side
+    compute_times.png  2x2 grid: the robot-reachable state count
                         (n_reachable), hypothesis-space cardinality (n_I),
                         problem size (|B|), and mean wall-clock time — so
                         the cost of a combination can be read against where it
@@ -1193,10 +1197,9 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
 
     fig, axes = plt.subplots(2, 2, figsize=(max(11, len(labels_t) * 1.1), 10))
 
-    # n_reachable, not n_states: the value iteration runs on the pruned matrix,
-    # so this is the size H3 actually pays for.  On Overcooked the two differ by
-    # more than two orders of magnitude (~38k states on paper, a few hundred
-    # reachable), which is exactly what makes building T_R_sto affordable.
+    # n_reachable, not n_states: how much of the state space the robot can
+    # actually get to.  On Overcooked the two differ by more than two orders of
+    # magnitude — ~38k states on paper, a few hundred reachable.
     axes[0, 0].bar(x_t, df_t["n_reachable"], color="darkorange")
     axes[0, 0].set_ylabel("n_reachable")
     axes[0, 0].set_title("State space reachable from the start")

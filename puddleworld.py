@@ -42,18 +42,45 @@ class PuddleWorld(GridWorld):
                  puddle_density=0.2, puddle_penalty=-1, goal_reward=10,
                  slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
-                 rooms_per_side=1, room_side=5):
+                 rooms_per_side=1, room_side=5, puddle_positions=None):
+        self.puddle_density = puddle_density
+        self.puddle_penalty = puddle_penalty
+        self.goal_reward = goal_reward
+        # Set *before* super().__init__() so protected_cells() sees them while the
+        # obstacles are drawn — same rule as the start, the goal, the doors,
+        # TaxiWorld's passenger and RockWorld's rocks: shared across the robot and
+        # every human of an instance, with only the obstacles varying.
+        self.puddle_positions = list(puddle_positions or [])
+        self._shared_puddles = bool(puddle_positions)
+
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
                          slip_prob=slip_prob, discount=discount,
                          max_tries=max_tries, obstacle_seed=obstacle_seed,
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
-        self.puddle_density = puddle_density
-        self.puddle_penalty = puddle_penalty
-        self.goal_reward = goal_reward
-        self.place_puddles()
+
+        if self._shared_puddles:
+            # Obstacles avoided these cells, so painting cannot bury a puddle and
+            # cannot overwrite an obstacle.
+            self.paint_puddles()
+        else:
+            self.place_puddles()
         self.reward_func = self.puddle_reward_func
+
+    def protected_cells(self):
+        """Keep obstacles off every shared puddle, as well as start and goal.
+
+        Needed because the shared layout is painted *after* the obstacles: without
+        it, a puddle landing on an obstacle cell would silently erase that
+        obstacle and the models would stop agreeing on the map.
+        """
+        return super().protected_cells() | set(self.puddle_positions)
+
+    def paint_puddles(self):
+        """Write the shared puddle layout onto the map."""
+        for pos in self.puddle_positions:
+            self.map[pos] = 0.5
 
     def place_puddles(self):
         """Puddles on free cells only, and never on the start or the goal.
@@ -97,10 +124,27 @@ class PuddleWorld(GridWorld):
         return super().cell_char(i, j)
 
 
+
+def sample_puddle_layout(board, puddle_density, rng, protected=()):
+    """One puddle layout for a whole instance, drawn once and shared.
+
+    Mirrors PuddleWorld.place_puddles' count, but draws distinct cells rather
+    than sampling with rejection, so the board carries exactly the requested
+    number instead of however many survived collisions.
+
+    `rng` is a module-level ``random``: the layout belongs to the instance, not
+    to any one model.
+    """
+    total_puddles = int(board * board * puddle_density)
+    free = [(i, j) for i in range(board) for j in range(board)
+            if (i, j) not in set(protected)]
+    return rng.sample(free, min(total_puddles, len(free)))
+
 def generate_and_visualize_puddleworld(start, goal, obstacle_density, puddle_density,
                                        model_type="Model", obstacle_seed=None,
                                        puddle_penalty=-1, goal_reward=10,
-                                       rooms_per_side=1, room_side=5, slip_prob=0.0):
+                                       rooms_per_side=1, room_side=5, slip_prob=0.0,
+                                       puddle_positions=None):
     """Generate a ``PuddleWorld``.
 
     ``puddle_penalty`` and ``goal_reward`` are forwarded rather than dropped:
@@ -117,7 +161,8 @@ def generate_and_visualize_puddleworld(start, goal, obstacle_density, puddle_den
                        goal_reward=goal_reward,
                        obstacle_seed=obstacle_seed, slip_prob=slip_prob,
                        rooms_per_side=rooms_per_side,
-                       room_side=room_side)
+                       room_side=room_side,
+                       puddle_positions=puddle_positions)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -125,7 +170,8 @@ def generate_and_visualize_puddleworld(start, goal, obstacle_density, puddle_den
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_determinized(obstacle_density, puddle_density, model_type, visualize=False,
-                       rooms_per_side=1, room_side=5, slip_prob=0.0):
+                       rooms_per_side=1, room_side=5, slip_prob=0.0,
+                       puddle_positions=None):
     """Generate one puddle world and determinize it; returns (next_states, s0, g, det_time).
 
     The two corners are derived from the same board the grid will build, so they
@@ -138,6 +184,7 @@ def _make_determinized(obstacle_density, puddle_density, model_type, visualize=F
         obstacle_density=obstacle_density, puddle_density=puddle_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
+        puddle_positions=puddle_positions,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -178,12 +225,20 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
         random.seed(seed)
         np.random.seed(seed)
 
+    # One puddle layout for the whole instance, as with the start, the goal, the
+    # doors, the taxi passenger and the rocks.  Only the obstacles vary.
+    size = board_side(rooms_per_side, room_side)
+    puddle_positions = sample_puddle_layout(
+        size, puddle_density, random, protected=((0, 0), (size - 1, size - 1)))
+
     robot = _make_determinized(obstacle_density, puddle_density, "Robot Model", visualize,
                                rooms_per_side=rooms_per_side,
-                               room_side=room_side, slip_prob=slip_prob)
+                               room_side=room_side, slip_prob=slip_prob,
+                               puddle_positions=puddle_positions)
     humans = [_make_determinized(obstacle_density, puddle_density, f"Human Model {i + 1}",
                                  visualize, rooms_per_side=rooms_per_side,
-                                 room_side=room_side, slip_prob=slip_prob)
+                                 room_side=room_side, slip_prob=slip_prob,
+                                 puddle_positions=puddle_positions)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]

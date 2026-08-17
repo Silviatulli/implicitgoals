@@ -346,6 +346,25 @@ class GridWorld:
         self.state_space = None
         total_obstacles = int(self.board_side * self.board_side * self.obstacle_density)
         protected = self.protected_cells()
+        # The loop below draws cells at random and rejects the protected and the
+        # already-taken ones, so asking for more obstacles than there are cells
+        # to put them on does not fail — it spins for ever, inside a swallowed
+        # stdout and behind a frozen progress bar.  Rare, but undiagnosable when
+        # it happens, and it got likelier the moment RockWorld started protecting
+        # every rock: the safe obstacle_density ceiling on a 9x9 drops from 0.975
+        # to about 0.68 at the default rock_density.
+        #
+        # Raised rather than clamped: silently placing fewer obstacles would make
+        # the obstacle_density reported in the CSV a lie, and the densities are
+        # arithmetically impossible for every seed, so retrying cannot help.
+        placeable = self.board_side * self.board_side - len(protected)
+        if total_obstacles > placeable:
+            raise ValueError(
+                f"obstacle_density {self.obstacle_density} asks for "
+                f"{total_obstacles} obstacles on a {self.board_side}x"
+                f"{self.board_side} board, but only {placeable} cells are free "
+                f"after protecting {len(protected)} (start, goal, and any shared "
+                f"items such as rocks or the taxi passenger).")
         obstacles_placed = 0
         while obstacles_placed < total_obstacles:
             x = self.rng.randint(self.board_side)
@@ -359,6 +378,26 @@ class GridWorld:
             self.start_pos = (self.rng.randint(self.board_side), self.rng.randint(self.board_side))
         if self.goal_pos is None:
             self.goal_pos = (self.rng.randint(self.board_side), self.rng.randint(self.board_side))
+
+    def successor_cells(self, state):
+        """The cells a single step from ``state`` can land on, staying included.
+
+        A *superset*: it names where a step could possibly end up, and says
+        nothing about whether any action actually goes there — walls, obstacles
+        and one-way doors are not consulted.  Deciding that stays the job of
+        ``get_transition_probability``, which remains the only authority on what
+        a transition is.
+
+        This exists purely so ``augment_mdp_to_deterministic`` can stop scanning
+        the whole state space.  Every action in the grid family either moves one
+        cell or stays put — the movement branch rejects anything else outright,
+        and TaxiWorld's pickup/dropoff only flip flags — so no reachable
+        successor is ever outside this set.  Presence of this method is also the
+        determinizer's signal that ``state[0]`` is the state's cell, which is the
+        invariant the whole grid family is built on.
+        """
+        x, y = state[0]
+        return ((x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
 
     # ── Connectivity ─────────────────────────────────────────────────────────
     def get_all_neighbors(self, state):
@@ -676,12 +715,41 @@ def augment_mdp_to_deterministic(mdp):
     original_actions = mdp.get_actions()
     n_states = len(states)
 
+    # The scan below is the whole cost of this function, and on its own it is
+    # O(|S|^2 |A|): for every (state, action) it used to ask the MDP about every
+    # state in the game.  Almost all of those calls exist only to be told 0 —
+    # _transition_probability_for_move rejects any non-adjacent cell on its first
+    # line — so on a 25x25 rockworld it made 100M calls to find at most 40
+    # non-zero answers per row.
+    #
+    # An MDP that can name the cells one step can reach (successor_cells) lets us
+    # test only the states sitting on those cells.  It is a search-space
+    # reduction and nothing more: every candidate still goes through
+    # get_transition_probability, so the matrix produced is identical, and an MDP
+    # without the method — minigridworld, whose state carries a facing direction
+    # — silently keeps the exhaustive scan.
+    successor_cells = getattr(mdp, "successor_cells", None)
+    states_by_cell = {}
+    if successor_cells is not None:
+        for state_idx, state in enumerate(states):
+            states_by_cell.setdefault(state[0], []).append(state_idx)
+
     per_state_outcomes = []
     for state in states:
+        if successor_cells is None:
+            candidates = range(n_states)
+        else:
+            # Sorted, so the outcomes keep the ascending-index order the
+            # exhaustive scan produced; the augmented action indices, and so the
+            # matrix itself, stay byte-identical to what older seeds produced.
+            candidates = sorted(
+                idx for cell in successor_cells(state)
+                for idx in states_by_cell.get(cell, ()))
         outcomes = []
         for orig_action in original_actions:
-            for next_state_idx, next_state in enumerate(states):
-                if mdp.get_transition_probability(state, orig_action, next_state) > 1e-12:
+            for next_state_idx in candidates:
+                if mdp.get_transition_probability(
+                        state, orig_action, states[next_state_idx]) > 1e-12:
                     outcomes.append(next_state_idx)
         per_state_outcomes.append(outcomes)
 
@@ -701,6 +769,12 @@ def augment_mdp_to_deterministic(mdp):
 
 def build_stochastic_matrix(mdp):
     """The robot's stochastic model, pruned to the states reachable from the start.
+
+    DEAD CODE — nothing in the pipeline calls this any more.  It existed to feed
+    bottlenecks.value_iteration, which fed H3; H3 now ranks bottlenecks by
+    Euclidean distance to the goal and needs neither.  Kept rather than deleted
+    because it still works and would be the starting point for any value-based
+    condition; nothing exercises it, so treat it as untested from here on.
 
     This is the matrix the determinization throws away.  augment_mdp_to_deterministic
     turns every (action, outcome) pair into its own action, which lets the agent

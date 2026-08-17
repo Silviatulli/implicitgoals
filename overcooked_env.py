@@ -245,6 +245,12 @@ def build_stochastic_matrix(next_states, start_state=0):
     """Overcooked's T_R_sto — the deterministic counterpart of
     gridworld_core.build_stochastic_matrix.
 
+    DEAD CODE — nothing in the pipeline calls this any more.  It existed to feed
+    bottlenecks.value_iteration, which fed H3; H3 is now Euclidean distance to
+    the goal, which Overcooked has no geometry for, so the game has no H3 column
+    at all.  Kept rather than deleted because it still works; nothing exercises
+    it, so treat it as untested from here on.
+
     Overcooked is deterministic by construction: build_transition_matrix_nomove
     emits T[state, action] -> next_state, with no slip and no MDP object behind
     it.  Its transition "distribution" is a point mass, so T_R_sto has entries

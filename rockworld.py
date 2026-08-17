@@ -50,6 +50,12 @@ from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
 # 9 valuable rocks uncapped, which is 512x the states.  3 rocks is 8x.
 MAX_VALUABLE_ROCKS = 3
 
+# Share of the rocks that are valuable; the rest are dangerous.  A module
+# constant rather than only a default argument because the instance-level
+# sampler and the per-grid fallback must agree on the split, or the two paths
+# would put different numbers of rocks on the same board.
+VALUABLE_ROCK_RATIO = 0.4
+
 
 class RockWorld(GridWorld):
     """GridWorld with valuable rocks (``1``) and dangerous rocks (``2``). Rocks
@@ -64,30 +70,70 @@ class RockWorld(GridWorld):
     """
 
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
-                 rock_density=0.3, valuable_rock_ratio=0.4,
+                 rock_density=0.3, valuable_rock_ratio=VALUABLE_ROCK_RATIO,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
                  slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
                  max_valuable_rocks=MAX_VALUABLE_ROCKS,
-                 rooms_per_side=1, room_side=5):
+                 rooms_per_side=1, room_side=5,
+                 valuable_positions=None, dangerous_positions=None):
+        self.rock_density = rock_density
+        self.valuable_rock_ratio = valuable_rock_ratio
+        self.valuable_rock_reward = valuable_rock_reward
+        self.dangerous_rock_penalty = dangerous_rock_penalty
+        self.max_valuable_rocks = max_valuable_rocks
+        # Set *before* super().__init__() so protected_cells() can see them while
+        # the obstacles are being drawn.  Shared rocks are the whole point: bit i
+        # of a state's `collected` tuple names valuable_positions[i], so unless
+        # every model of an instance lists the same cells in the same order, the
+        # same state ID means a different rock in each model and the bottleneck
+        # sets the pipeline unions are not comparable.  Same rule as the start,
+        # the goal, the doors and TaxiWorld's passenger: only obstacles vary.
+        self.valuable_positions = list(valuable_positions or [])
+        self.dangerous_positions = list(dangerous_positions or [])
+        self._shared_rocks = bool(valuable_positions or dangerous_positions)
+
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
                          slip_prob=slip_prob, discount=discount,
                          max_tries=max_tries, obstacle_seed=obstacle_seed,
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
-        self.rock_density = rock_density
-        self.valuable_rock_ratio = valuable_rock_ratio
-        self.valuable_rock_reward = valuable_rock_reward
-        self.dangerous_rock_penalty = dangerous_rock_penalty
-        self.max_valuable_rocks = max_valuable_rocks
-        self.valuable_positions = []
-        self.place_rocks()
+
+        if self._shared_rocks:
+            # Obstacles avoided these cells, so painting them now cannot bury
+            # one, and every model of the instance paints the same cells.
+            self.paint_rocks()
+        else:
+            # Standalone use with no shared layout: draw this grid's own rocks
+            # on whatever the obstacles left free, as before.
+            self.place_rocks()
         self.reward_func = self.rock_reward_func
         # GridWorld.__init__ built the state space before the rocks existed, so
         # it has no collected bits yet.  Now that they are placed, rebuild it.
         self.state_space = None
         self.create_state_space()
+
+    def protected_cells(self):
+        """Keep obstacles off every rock, as well as the start and the goal.
+
+        A shared rock has to survive each model's independent obstacle draw, for
+        the same reason TaxiWorld protects the passenger: burying it under one
+        model's obstacles would silently break the sharing.  An obstacle *next*
+        to a rock is fine and is how a model can end up unable to collect it —
+        that is variation, not corruption, and unlike the passenger it never
+        makes the board unsolvable, since reaching the goal never requires
+        collecting anything.
+        """
+        return (super().protected_cells()
+                | set(self.valuable_positions) | set(self.dangerous_positions))
+
+    def paint_rocks(self):
+        """Write the shared rock layout onto the map (1 valuable, 2 dangerous)."""
+        for pos in self.valuable_positions:
+            self.map[pos] = 1
+        for pos in self.dangerous_positions:
+            self.map[pos] = 2
 
     # ── State space ──────────────────────────────────────────────────────────
     def create_state_space(self):
@@ -202,16 +248,42 @@ class RockWorld(GridWorld):
         return super().cell_char(i, j)
 
 
+def sample_rock_layout(board, rock_density, rng,
+                       valuable_rock_ratio=VALUABLE_ROCK_RATIO,
+                       max_valuable_rocks=MAX_VALUABLE_ROCKS,
+                       protected=()):
+    """One rock layout for a whole instance: (valuable_positions, dangerous).
+
+    Drawn once in generate_determinized_models and handed to every model, so the
+    robot and the humans agree on which rock bit i of `collected` refers to.
+    Counts mirror RockWorld.place_rocks exactly, so sharing does not change how
+    many rocks a board carries — only that they land in the same places.
+
+    `rng` is a module-level ``random`` (not a grid's own RandomState): the layout
+    belongs to the instance, not to any one model.
+    """
+    total_rocks = int(board * board * rock_density)
+    n_valuable = min(int(total_rocks * valuable_rock_ratio), max_valuable_rocks)
+    free = [(i, j) for i in range(board) for j in range(board)
+            if (i, j) not in set(protected)]
+    picked = rng.sample(free, min(total_rocks, len(free)))
+    return picked[:n_valuable], picked[n_valuable:]
+
+
 def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density,
                                      model_type="Model", obstacle_seed=None,
-                                     rooms_per_side=1, room_side=5, slip_prob=0.0):
-    """Generate a ``RockWorld``."""
+                                     rooms_per_side=1, room_side=5, slip_prob=0.0,
+                                     valuable_positions=None,
+                                     dangerous_positions=None):
+    """Generate a ``RockWorld``, on a shared rock layout when one is given."""
     return RockWorld(start=start, goal=goal,
                      obstacle_density=obstacle_density,
                      rock_density=rock_density,
                      obstacle_seed=obstacle_seed, slip_prob=slip_prob,
                      rooms_per_side=rooms_per_side,
-                     room_side=room_side)
+                     room_side=room_side,
+                     valuable_positions=valuable_positions,
+                     dangerous_positions=dangerous_positions)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +291,8 @@ def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_determinized(obstacle_density, rock_density, model_type, visualize=False,
-                       rooms_per_side=1, room_side=5, slip_prob=0.0):
+                       rooms_per_side=1, room_side=5, slip_prob=0.0,
+                       valuable_positions=None, dangerous_positions=None):
     """Generate one rock world and determinize it; returns (next_states, s0, g, det_time).
 
     The two corners are derived from the same board the grid will build, so they
@@ -232,6 +305,8 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
         obstacle_density=obstacle_density, rock_density=rock_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
+        valuable_positions=valuable_positions,
+        dangerous_positions=dangerous_positions,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -272,12 +347,25 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
         random.seed(seed)
         np.random.seed(seed)
 
+    # One rock layout for the whole instance, as with the start, the goal, the
+    # doors and TaxiWorld's passenger.  Drawing it per model made bit i of
+    # `collected` name a different cell in every model, so a bottleneck state ID
+    # meant something different in T_R than in each T_H and the union the
+    # pipeline takes over them was comparing unrelated labels.
+    size = board_side(rooms_per_side, room_side)
+    valuable_positions, dangerous_positions = sample_rock_layout(
+        size, rock_density, random, protected=((0, 0), (size - 1, size - 1)))
+
     robot = _make_determinized(obstacle_density, rock_density, "Robot Model", visualize,
                                rooms_per_side=rooms_per_side,
-                               room_side=room_side, slip_prob=slip_prob)
+                               room_side=room_side, slip_prob=slip_prob,
+                               valuable_positions=valuable_positions,
+                               dangerous_positions=dangerous_positions)
     humans = [_make_determinized(obstacle_density, rock_density, f"Human Model {i + 1}",
                                  visualize, rooms_per_side=rooms_per_side,
-                                 room_side=room_side, slip_prob=slip_prob)
+                                 room_side=room_side, slip_prob=slip_prob,
+                                 valuable_positions=valuable_positions,
+                                 dangerous_positions=dangerous_positions)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
