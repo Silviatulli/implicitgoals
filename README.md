@@ -1,5 +1,20 @@
 # About this branch
 
+`deterministic-envs-larger-sweep` extends `yacine_game_variants` with two
+changes:
+
+1. **Deterministic transitions** (`slip_prob=0.0` in all environments). The
+   previous default was a 10 % slip probability inherited from the original
+   codebase. Determinism eliminates a confound — policy differences now reflect
+   structural features of the hypothesis space, not noisy transition outcomes —
+   and makes determinized-MDP construction slightly cheaper.
+2. **Larger default sweep** in `experiment.py`: human-model counts now default
+   to `[3, 5, 10, 15]` (was `[3, 5]`), board sizes to room-sides `[3, 4, 5]`
+   (boards 9×9, 12×12, 15×15; was `[3]` only), simulations per combination
+   to `30` (was `50`, reduced to keep wall-clock manageable at the larger
+   grid sizes), and the bottleneck caps raised to `--max-bottlenecks 22` /
+   `--max-exact-n 18` to cover the denser boards.
+
 `yacine_game_variants` is `yacine_overcooked` plus one thing: **walls**. Every
 grid game is now built on a grid of rooms joined by one-way doors, instead of an
 open board. Everything else — the pipeline, the five games, the four selection

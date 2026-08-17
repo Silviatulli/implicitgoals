@@ -39,7 +39,7 @@ class PuddleWorld(GridWorld):
 
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
                  puddle_density=0.2, puddle_penalty=-1, goal_reward=10,
-                 slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1,
+                 slip_prob=0.0, discount=0.99, max_tries=100, obstacle_seed=1,
                  rooms_per_side=1, room_side=5):
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
