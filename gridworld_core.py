@@ -117,7 +117,7 @@ class GridWorld:
 
     def __init__(self, rooms_per_side=1, room_side=5, start=None, goal=None,
                  obstacle_density=0.1,
-                 slip_prob=0.1, discount=0.99, max_tries=100,
+                 slip_prob=0.1, discount=0.99, max_tries=10000,
                  obstacle_seed=1):
         # Every game reaches the board through here, so this is the one place the
         # geometry is checked.  Unguarded, rooms_per_side=0 builds a 0x0 board in
@@ -150,6 +150,8 @@ class GridWorld:
         valid_config_found = False
         curr_tries = 0
         while not valid_config_found and curr_tries < max_tries:
+            if curr_tries // 1000 > 0:
+                print(f"GridWorld: retry {curr_tries} of {max_tries} to find a valid layout")
             self._blank_board()
             # Start and goal first: protected_cells() can only keep obstacles off
             # them if they already exist.
