@@ -1,42 +1,32 @@
 # About this branch
 
-`yacine_game_variants` is `yacine_overcooked` plus one thing: **walls**. Every
-grid game is now built on a grid of rooms joined by one-way doors, instead of an
-open board. Everything else — the pipeline, the five games, the four selection
-rules — comes from `yacine_overcooked` unchanged, and the branch is strictly
-ahead of it (one commit, nothing diverged).
+Two branches matter:
 
-The reason is `|I|`, the size of the hypothesis space. On an open board a single
-trajectory can tour every bottleneck and come back, so Algorithm 1 always returns
-exactly one maximally achievable subset: `|I| = 1` on 40 seeds out of 40,
-whatever the obstacle layout. With one hypothesis there is nothing to ask about,
-and every selection rule is being compared on a problem with no questions in it.
-One-way doors make the room grid a DAG — going through a door commits, and the
-routes not taken become unreachable — so several subsets can be maximal at once.
-See the *Add more variants of the games* item below for what that actually
-bought, measured.
+- **`yacine_overcooked`** — the clean-up. It merges everything that came before
+  into one codebase: redundant files and dead code deleted, only what the
+  experiments really use kept. It fixes almost nothing and adds almost nothing;
+  it just makes the rest readable.
 
-`yacine_overcooked` itself is the unified version of the codebase — redundant
-files and dead code deleted, only what the experiments actually use remains.
+- **`yacine_game_variants`** (this one) — the work branch, and the one furthest
+  ahead. It adds variants of the games so that `|I|` — the number of hypotheses,
+  written Φ in the paper — can be greater than 1, and every change made since
+  then lives here too. It stays **exactly ahead of** `yacine_overcooked`: same
+  history, extra commits on top, no divergence.
 
-Two-stage split:
-1. **Game modules** implement physics only, and output determinized
-   transition matrices (`T_R`, `T_H_list`, `start_state`, `goal_state`). No
-   notion of bottlenecks or queries.
-2. **`experiment.py`** turns those matrices into a Query MDP (bottlenecks,
-   Algorithm 1, solve) using the game-agnostic `bottlenecks.py`. 
-   (Not paralelized because some config demand a lot of ram)
+## How the code is split
 
-Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI),
-plus H1 Info Gain, H3 Goal Proximity and H4 Query Frequency — reported against
-the random-order control, so five columns. `--h2` runs each rule a second time
-wearing the H2 dominance mask, for nine; it is off by default — see the remark
-on H2(ii) below for why.
+1. **Game modules** — physics only. They output determinized transition matrices
+   (`T_R`, `T_H_list`, `start_state`, `goal_state`) and know nothing about
+   bottlenecks or queries.
+2. **`experiment.py`** — turns those matrices into a Query MDP (bottlenecks,
+   Algorithm 1, solve) with the game-agnostic `bottlenecks.py`. Not parallelised,
+   because some configurations need a lot of RAM.
 
-Next step: `|I|` is no longer stuck at 1, but the typical instance still sits at
-1 or 2 against the 6 the default geometry allows, because obstacles prune most
-of the monotone routes. Making routes survive the obstacles is the open problem,
-not adding more rooms.
+Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI), H1
+Info Gain, H3 Goal Proximity and H4 Query Frequency — reported against the
+random-order control, so five columns. `--h2` runs each rule a second time
+wearing the H2 dominance mask, for nine. H2 is not deleted, but it looks
+irrelevant, so it is off by defaul.
 
 ## Architecture — how a request flows through the code
 
@@ -62,8 +52,8 @@ not adding more rooms.
 │    Turns bare matrices into a Query MDP and solves it.                │
 │                                                                       │
 │ bottlenecks.py                                                        │
-│   compute_bottlenecks_per_matrix  -> one set per human; union -> B    │
-│   remove_toboggan_redundancies    -> B_filter    real decision nodes  │
+│   compute_bottlenecks_per_matrix  -> per human; union -> B_nofilter   │
+│   remove_toboggan_redundancies    -> B           real decision nodes  │
 │   find_maximally_achievable_subsets -> I         (Algorithm 1)        │
 │   subsets_to_array                -> I_array                          │
 │   Oracle                          -> simulated human answers          │
@@ -71,7 +61,7 @@ not adding more rooms.
 │   solve_query_mdp_info_gain       -> GreedyQNet  H1                   │
 │   solve_query_mdp_proximity       -> GreedyQNet  H3 (needs V_R)       │
 │   solve_query_mdp_frequency       -> GreedyQNet  H4                   │
-│   build_dominance                 -> (n,n) mask  H2, not a policy     │
+│   build_dominance                 -> (n,n) mask  H2 — off by default  │
 │   evaluate_policy_on_real_human   -> query counts; owns termination   │
 └───────────────────────────────────────────────────────────────────────┘
                                     |
@@ -110,14 +100,14 @@ directly.
 ### Query-MDP layer (game-agnostic)
 
 `bottlenecks.py` takes `T_R`, the candidate `T_H_list`, a start state and a
-goal state, and finds the bottlenecks (`B`), filters them down to real
-decision points (`B_filter`), enumerates the achievable subsets (`I`), builds
+goal state, and finds the bottlenecks (`B_nofilter`), filters them down to real
+decision points (`B`), enumerates the achievable subsets (`I`), builds
 one policy per selection rule, and evaluates each of them against a
 deterministic human oracle. It is the only file in this layer — one module for
 the whole game-agnostic half of the pipeline.
 
 Termination lives in `evaluate_policy_on_real_human`, never in a policy: a
-condition is only a scoring rule over `B_filter`, and every one of them stops on
+condition is only a scoring rule over `B`, and every one of them stops on
 the same `I_hat ⊆ I_k` test `solve_query_mdp_exact` builds its absorbing masks
 from. That is what makes the nine columns comparable.
 
@@ -127,165 +117,3 @@ from. That is what makes the nine columns comparable.
 count, and times every step. It writes `results/compute_times.csv` and
 `results/query_counts.csv`, then plots them into `results/compute_times.png`
 and `results/query_counts.png`.
-
-## TODO / next steps
-
-- ~~**Replace 'n_states' with the number of states reachabel from the start state.** (only modify layer 3)~~ — **DONE**
-
-  ~~The current plot express thee ~40k states instead of ~120 for Overcooked, which is misleading.~~
-
-  The first panel of `compute_times.png` now plots `n_reachable`, the side of
-  the pruned matrix the value iteration actually runs on (161 for Overcooked
-  against 38 417 on paper). `n_states` is kept as a CSV column.
-
-- ~~**Add the other Query-MDP solving methods.** (only modify layer 3)~~ — **DONE**
-
-  ~~`solve_query_mdp_exact` (Strategic VI) is the only one wired in right
-  now. I will try to copy paste your other methods developed on the other
-  branch and hook them into `experiment.py`.~~
-
-  All four hypotheses are wired into `experiment.py`, giving nine columns:
-  Random, plus each of VI / H1 Info Gain / H3 Goal Proximity / H4 Query
-  Frequency run with and without the H2 dominance mask. H2 has no column of
-  its own because it is not a selection rule — it is applied at inference via
-  `evaluate_policy_on_real_human(dominance=...)`. The four "+ H2" columns are
-  now behind `--h2` and off by default — see the remark on H2(ii) below.
-
-- ~~**Add more variants of the games.** (only modify layer 1)~~ — **DONE**
-
-  ~~The goal is to grow the cardinality of `I` (the maximally achievable
-  bottleneck subsets) so the query policies are tested on harder, more
-  interesting instances than the current small-`|I|` ones.~~
-
-  The four grid games now build on a **room grid with one-way doors**, set by
-  `--rooms-per-side R` and `--room-sides C`: R x R rooms of C x C cells, walls
-  thin (they run *between* cells, so the board is exactly `R*C` a side), and one
-  door per wall between neighbouring rooms. Every door faces **east or south**
-  and sits at the middle of its wall, identical for the robot and every human —
-  only the obstacles vary between models. `--rooms-per-side 1` is the old open
-  board. Default: 3x3 rooms of 3x3, a 9x9 board with 12 doors.
-
-  The orientation is the point. On an open board a single trajectory can tour
-  every bottleneck and come back, so Algorithm 1 returns exactly one maximally
-  achievable subset whatever the obstacles do. One-way doors make the room grid
-  a DAG: stepping through a door commits, and the routes not taken become
-  unreachable, so the achievable subsets are the monotone routes through the
-  rooms — `C(2(R-1), R-1)` of them, 6 for 3x3 and 20 for 4x4.
-
-  **Measured, 40 seeds per geometry, gridworld, 3 humans, default density:**
-
-  | board | `|I|` distribution | mean | max |
-  |---|---|---|---|
-  | open 9x9 | 1 x40 | 1.00 | 1 |
-  | 3x3 rooms of 3 | 1 x25, 2 x7, 3 x2 (6 skipped) | 1.32 | 3 |
-  | 4x4 rooms of 3 | 1 x25, 2 x7, 3 x2, 4 x1 (5 skipped) | 1.40 | 4 |
-
-  So `|I| = 1` stopped being *structural* — it was unavoidable on an open board
-  and is now beaten on about a quarter of instances — but the goal is only half
-  reached: the typical instance is still `|I|` 1 or 2, well below the 6 and 20
-  the geometry allows. Obstacles block doors and prune most monotone routes, and
-  `|B_filter|` has grown to 11-18, so 5-6 of 40 repetitions now exceed
-  `--max-bottlenecks` and are skipped outright. Getting the mean up means making
-  routes survive the obstacles, not adding more rooms.
-
-  This also needed one change in layer 2: with one-way doors the transition
-  graph is no longer strongly connected, so `find_maximally_achievable_subsets`
-  now checks that a covering visiting order can still *reach the goal*
-  afterwards. Without it, a subset stranded behind a door counted as achievable.
-
-- ~~**Stop the grid generator from reseeding the global numpy RNG.** (only modify layer 1)~~ — **DONE**
-
-  ~~`GridWorld.place_random_obstacles` calls `np.random.seed()`, so building a grid
-  resets the process-wide numpy generator — once per robot and per human. The
-  `np.random.seed(seed)` in `generate_determinized_models` is therefore dead, and
-  `experiment.py`'s human draw depends on the last human's obstacle seed instead
-  of the repetition seed. Fix: give `GridWorld` its own `np.random.Generator`.~~
-
-  `GridWorld` now owns a `self.rng` built by `gridworld_core.seeded_rng()`, and
-  every draw in the four grid games goes through it. It is a
-  `np.random.RandomState`, not a `default_rng`: RandomState is the same MT19937
-  stream `np.random.seed` drove, so every map is byte-identical to the ones the
-  old code produced for the same `obstacle_seed` — the only thing that changed is
-  who else can see the stream. The `np.random.seed(seed)` in each
-  `generate_determinized_models` is live again, and `experiment.py`'s human draw
-  now follows the repetition seed.
-
-  One bug fell out of it. `place_random_obstacles` ran *inside* `__init__`'s
-  retry loop and reseeded on every entry, so a layout that failed
-  `check_for_path` was redrawn identically `max_tries` times before the
-  empty-map fallback. A retry now actually retries.
-
-
-## Remark — the H2(ii) dominance mask may not be sound
-
-Flagged to Silvia, waiting on her answer. **`dominance` is off by default in
-`main` until then.** Nothing is deleted; `build_dominance` and the
-`evaluate_policy_on_real_human(dominance=...)` path still work, and the nine
-columns still run if you switch it back on.
-
-### Notation
-
-One letter for one thing, matching the code:
-
-| symbol | is | in the code |
-|---|---|---|
-| $\mathbb{I}$ | the hypothesis space — the maximally achievable subsets Algorithm 1 returns | `I` |
-| $I_k \in \mathbb{I}$ | one hypothesis, a set of bottlenecks | `I[k]`, row $k$ of `I_array` |
-| $I_G$ | the human's true subgoal set — unknown, and what the queries narrow down | drawn from `oracle_sets` |
-| $B$ | the queryable bottlenecks | `B_filter` |
-| $K_{\neg I}$ | bottlenecks the oracle has denied, i.e. confirmed **not** in $I_G$ | `K_not_I` |
-
-### What the mask does
-
-`build_dominance` marks a pair $(b_1, b_2)$ when every $I_k \in \mathbb{I}$ that
-contains $b_1$ also contains $b_2$. At inference, if the oracle answers *no* on
-$b_2$, we rule out $b_1$ too, without spending a query.
-
-### Why that needs $I_G \in \mathbb{I}$
-
-The argument is: the rule holds for every $I_k \in \mathbb{I}$, so it holds for
-the human's true subgoal set $I_G$, so we can contrapose. That last step only
-works if $I_G$ is itself one of the subsets in $\mathbb{I}$.
-
-But it isn't guaranteed. $\mathbb{I}$ comes from **the robot**: Algorithm 1
-enumerates what `T_R` can achieve, and keeps only the *maximal* ones. $I_G$
-comes from **the human**: it's the bottleneck set of one of the `T_H_list`
-matrices. Nothing in the pipeline makes these two agree. $I_G$ may not be
-achievable by the robot at all, and even when it is, there's no reason for it to
-be maximal — so in general we only get $I_G \subseteq I_k$ for some $I_k$, not
-$I_G \in \mathbb{I}$.
-
-### What goes wrong
-
-```
-B         = {1, 2, 3}
-𝕀         = {{1,2}, {2,3}}    # robot can't do 1 and 3 in one plan
-I_G       = {1}               # achievable, but not maximal -> I_G ∉ 𝕀
-
-supp(1) = {{1,2}} ⊆ supp(2) = both   =>  mask marks (1, 2)
-
-query 2  -> oracle says "no"
-mask     -> rules out 1
-           but 1 IS in I_G, and it was never queried.
-```
-
-The robot then commits to a plan that skips the human's only subgoal, and
-never asks the one question that would have caught it.
-
-### It probably isn't only H2
-
-The consistency filter has the same requirement: dropping every $I_k$ that
-contains a denied bottleneck is only justified if the $I_k$ are candidates for
-$I_G$ *exactly*. On the example above, answering *no* on $2$ drops both
-subsets and leaves the consistent set empty — even though $\{1,2\}$ was a
-perfectly good plan the whole time.
-
-In this branch, the termination test is already the other way round:
-`evaluate_policy_on_real_human` stops on
-
-$$\exists\, I_k \in \mathbb{I} \quad \text{s.t.} \quad B \setminus K_{\neg I} \subseteq I_k$$
-
-i.e. *covering* $I_G$, not *identifying* it. Covering is the weaker, safer
-condition and doesn't need $I_G \in \mathbb{I}$. So the codebase currently mixes
-the two readings — inclusion at termination, equality in the filter and in the
-mask.

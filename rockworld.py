@@ -37,7 +37,8 @@ from itertools import product
 
 import numpy as np
 
-from gridworld_core import GridWorld, augment_mdp_to_deterministic, board_side
+from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
+                            DEFAULT_MAX_TRIES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -65,7 +66,8 @@ class RockWorld(GridWorld):
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
                  rock_density=0.3, valuable_rock_ratio=0.4,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
-                 slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1,
+                 slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
+                 obstacle_seed=1,
                  max_valuable_rocks=MAX_VALUABLE_ROCKS,
                  rooms_per_side=1, room_side=5):
         super().__init__(start=start, goal=goal,
@@ -202,12 +204,12 @@ class RockWorld(GridWorld):
 
 def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density,
                                      model_type="Model", obstacle_seed=None,
-                                     rooms_per_side=1, room_side=5):
+                                     rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate a ``RockWorld``."""
     return RockWorld(start=start, goal=goal,
                      obstacle_density=obstacle_density,
                      rock_density=rock_density,
-                     obstacle_seed=obstacle_seed,
+                     obstacle_seed=obstacle_seed, slip_prob=slip_prob,
                      rooms_per_side=rooms_per_side,
                      room_side=room_side)
 
@@ -217,7 +219,7 @@ def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_determinized(obstacle_density, rock_density, model_type, visualize=False,
-                       rooms_per_side=1, room_side=5):
+                       rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate one rock world and determinize it; returns (next_states, s0, g, det_time).
 
     The two corners are derived from the same board the grid will build, so they
@@ -229,7 +231,7 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density, rock_density=rock_density,
         rooms_per_side=rooms_per_side,
-        room_side=room_side,
+        room_side=room_side, slip_prob=slip_prob,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -243,7 +245,8 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
                                  rock_density=0.3, seed=None, verbose=True,
-                                 visualize=False, rooms_per_side=1, room_side=4):
+                                 visualize=False, rooms_per_side=1, room_side=4,
+                                 slip_prob=0.0):
     """Build a robot model + ``num_humans`` human RockWorld models and determinize each.
 
     Parameters
@@ -271,10 +274,10 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
 
     robot = _make_determinized(obstacle_density, rock_density, "Robot Model", visualize,
                                rooms_per_side=rooms_per_side,
-                               room_side=room_side)
+                               room_side=room_side, slip_prob=slip_prob)
     humans = [_make_determinized(obstacle_density, rock_density, f"Human Model {i + 1}",
                                  visualize, rooms_per_side=rooms_per_side,
-                                 room_side=room_side)
+                                 room_side=room_side, slip_prob=slip_prob)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]

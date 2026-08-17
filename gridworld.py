@@ -29,7 +29,7 @@ from gridworld_core import GridWorld, augment_mdp_to_deterministic, board_side
 
 def generate_and_visualize_gridworld(start, goal, obstacle_density,
                                      max_attempts=100, model_type="Model", obstacle_seed=None,
-                                     rooms_per_side=1, room_side=5):
+                                     rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate a solvable ``GridWorld`` (retries up to ``max_attempts``).
 
     Returns the ``GridWorld`` instance, or ``None`` if no solvable layout was
@@ -39,7 +39,7 @@ def generate_and_visualize_gridworld(start, goal, obstacle_density,
         grid = GridWorld(start=start, goal=goal,
                          obstacle_density=obstacle_density,
                          rooms_per_side=rooms_per_side,
-                         room_side=room_side,
+                         room_side=room_side, slip_prob=slip_prob,
                          obstacle_seed=obstacle_seed)
         if grid.check_for_path():
             return grid
@@ -51,7 +51,7 @@ def generate_and_visualize_gridworld(start, goal, obstacle_density,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_determinized(obstacle_density, model_type, visualize=False,
-                       rooms_per_side=1, room_side=5):
+                       rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate one grid and determinize it; returns (next_states, s0, g, det_time).
 
     The two corners are derived from the same board the grid will build, so they
@@ -63,7 +63,7 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density,
         rooms_per_side=rooms_per_side,
-        room_side=room_side,
+        room_side=room_side, slip_prob=slip_prob,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if mdp is None:
         return None
@@ -79,7 +79,8 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
                                  seed=None, verbose=True,
-                                 visualize=False, rooms_per_side=1, room_side=4):
+                                 visualize=False, rooms_per_side=1, room_side=4,
+                                 slip_prob=0.0):
     """Build a robot model + ``num_humans`` human models and determinize each.
 
     Parameters
@@ -115,7 +116,7 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
 
     robot = _make_determinized(obstacle_density, "Robot Model", visualize,
                                rooms_per_side=rooms_per_side,
-                               room_side=room_side)
+                               room_side=room_side, slip_prob=slip_prob)
     if robot is None:
         raise RuntimeError("Failed to generate a solvable robot GridWorld.")
 
@@ -123,7 +124,7 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
     for i in range(num_humans):
         h = _make_determinized(obstacle_density, f"Human Model {i + 1}",
                                visualize, rooms_per_side=rooms_per_side,
-                               room_side=room_side)
+                               room_side=room_side, slip_prob=slip_prob)
         if h is not None:
             humans.append(h)
 

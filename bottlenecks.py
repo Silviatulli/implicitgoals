@@ -19,19 +19,20 @@ none of them.
 Pipeline
 --------
   1.  compute_bottlenecks_per_matrix(T_H_list, start, goal) → one bottleneck set per
-                                                         human; union them → B
-  2.  remove_toboggan_redundancies(T_R, B, goal|None)    → B_filter   true decision nodes
-  3.  find_maximally_achievable_subsets(B_filter, T_R, start, goal)
+                                                         human; union them → B_nofilter
+  2.  remove_toboggan_redundancies(T_R, B_nofilter, goal|None)
+                                                         → B          true decision nodes
+  3.  find_maximally_achievable_subsets(B, T_R, start, goal)
                                                          → I          [Algorithm 1]
-  4.  subsets_to_array(I, B_filter)                      → I_array    bool (len_I_array, n)
+  4.  subsets_to_array(I, B)                             → I_array    bool (len_I_array, n)
   5.  one policy per condition — solve_query_mdp_exact (VI), _info_gain (H1),
       _proximity (H3), _frequency (H4); build_dominance (H2) returns a mask, not
       a policy, because H2 selects nothing                → §7
   6.  evaluate_policy_on_real_human(...)                 → query count per episode
 
-B_filter is what the robot may ask about, and the bit order every policy and
-I_array agree on.  It is sorted at step 1 and that order is kept to the end of
-the pipeline; it is never derived from I — see _bit_order().
+B is what the robot may ask about, and the bit order every policy and I_array
+agree on.  It is sorted at step 1 and that order is kept to the end of the
+pipeline; it is never derived from I — see _bit_order().
 
 Step 6 also provides the random-order "query all" baseline (policy_network=None)
 and applies H2 (dominance=...), which is why the "X" and "X + H2" columns can
@@ -39,15 +40,18 @@ share one policy object.
 
 Notation
 --------
-B            bottleneck state IDs — mandatory waypoints on every path to a goal state.
-B_filter     B minus the "toboggan" states that offer no choice (see §2).
+B_nofilter   bottleneck state IDs — mandatory waypoints on every path to a goal
+             state, unioned over the candidate humans.
+B            the query set: B_nofilter minus the "toboggan" states that offer no
+             choice (see §2).  What every function below means by `B`, and equal
+             to B_nofilter wherever the filter is not run.
 I            list of maximally achievable bottleneck subsets (Algorithm 1 output);
              each element is a list of bottleneck state IDs.  One of them is the
              subset the human actually pursues.
 I_array      bool matrix, shape (len(I), n): row k is subset I[k], columns ordered
              like the bottleneck list it was built against.
 I_G          the evaluated human's own subgoal set — the bottlenecks it answers YES
-             to, restricted to B_filter.  Unknown to the robot; the queries are
+             to, restricted to B.  Unknown to the robot; the queries are
              what narrow it down.  The Query MDP assumes I_G ∈ I ("the hypothesis
              space contains the truth"); when it does not, the episode is a
              failure and Hypothesis 2's entailment stops being valid — see
@@ -189,7 +193,7 @@ def shuffle_bottlenecks(B, seed=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2.  Toboggan filtering  →  B_filter   [optional preprocessing before Algorithm 1]
+# 2.  Toboggan filtering  →  B   [optional preprocessing before Algorithm 1]
 # ─────────────────────────────────────────────────────────────────────────────
 
 def remove_toboggan_redundancies(T_matrix, B_list, goal_state):
@@ -201,7 +205,7 @@ def remove_toboggan_redundancies(T_matrix, B_list, goal_state):
     discarded.  Terminal nodes (0 successors) and true decision points (≥2
     successors) are kept.
 
-    This step compresses 2^|B| to 2^|B_filter| before Algorithm 1, which is
+    This step compresses 2^|B_nofilter| to 2^|B| before Algorithm 1, which is
     the key that makes the search tractable on larger bottleneck sets.
 
     Parameters
@@ -384,7 +388,7 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
 
     Parameters
     ----------
-    possible_bottlenecks : list[int]   bottleneck state IDs (B or B_filter)
+    possible_bottlenecks : list[int]   bottleneck state IDs (B_nofilter or B)
     T_R                    : ndarray     clean transition matrix
     start_state          : int
     goal_state           : int or None
@@ -489,8 +493,8 @@ def subsets_to_array(I, B):
     Parameters
     ----------
     I : list[iterable[int]]  maximally achievable subsets, raw state IDs
-    B : list[int]            bottleneck list defining the column order — B_filter,
-                             in the order it was sorted into when it was built
+    B : list[int]            bottleneck list defining the column order — the query
+                             set, in the order it was sorted into when it was built
 
     Returns
     -------
@@ -657,7 +661,8 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
         Per-bottleneck P(YES).  None means uniform 50/50.
     B : iterable of bottlenecks — mandatory
         What the robot may query: the action set, and the bit order of the
-        returned policy.  It is B_filter, and it is deliberately *not* derivable
+        returned policy.  It is the query set — the toboggan filter's output
+        wherever that stage runs — and it is deliberately *not* derivable
         from I — a bottleneck belonging to no I_k is still worth asking about,
         since YES proves the human matches no hypothesis (failure) and NO is
         required before any hypothesis can be certified (success).  Deriving it
@@ -770,10 +775,15 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
 # uses (§6).  So every condition is comparable to the VI baseline by
 # construction, and a condition is just a scoring rule over B.
 #
-# The exception is H2, which is not a selection rule at all: it is an
-# answer-preserving reduction that grants extra NOs for free after each oracle
-# NO.  It therefore lives on the knowledge state (the env), not in a score, and
-# composes with any of the others.
+# The exception is H2, which is not a selection rule at all: it grants extra NOs
+# for free after each oracle NO, so it lives on the knowledge state (the env),
+# not in a score, and composes with any of the others.
+#
+# H2 is also **UNSOUND** — it can rule out a bottleneck the human actually wants
+# without ever asking about it, and the robot then commits to a plan that skips
+# that subgoal.  It has been dropped from the paper.  The code keeps it behind
+# --h2, off by default, so the effect stays reproducible; see build_dominance
+# for why it breaks and how often.  Do not turn it on to report a query count.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _bit_order(I, B):
@@ -791,12 +801,12 @@ def _bit_order(I, B):
     corrected underneath the caller.
 
     B is likewise mandatory, with no fallback to the labels occurring in I: those
-    are a strict subset of B_filter, so deriving B would drop the bottlenecks
+    are a strict subset of B, so deriving it would drop the bottlenecks
     belonging to no I_k and change the answer without failing.
     """
     if B is None:
         raise ValueError(
-            "B is mandatory — pass B_filter. It cannot be derived from I: the "
+            "B is mandatory — pass the query set. It cannot be derived from I: the "
             "bottlenecks belonging to no I_k are exactly the ones I does not "
             "mention, and dropping them changes the answer.")
     B = [_as_label(b) for b in B]
@@ -938,8 +948,11 @@ def _dominance_closure(T):
     which is a quantifier artifact, not a structural redundancy.  It is also
     exactly the wrong bit to discard for free: a bottleneck in no ϕ is the one
     whose YES proves the human matches nothing, so ruling it out unasked turns a
-    failure into a success.  Keeping the row would make H2 change the answer
-    rather than only the number of questions.
+    failure into a success.
+
+    Dropping those rows makes the mask *less* wrong, not correct: H2 is unsound
+    with or without them, because the entailment needs I_G ∈ Φ and nothing
+    guarantees it.  See build_dominance.
     """
     n = T.shape[1]
     # prec[b1, b2] — no hypothesis holds b1 without also holding b2.
@@ -1090,12 +1103,29 @@ def build_dominance(I, B):
     That separation is what lets one policy serve both the "H1" and "H1 + H2"
     columns — the two runs differ only in whether this mask is passed.
 
-    Soundness.  H2 must only ever change the number of questions, never the
-    answer, and that holds for every human — including one whose subgoal set is
-    in no I_k, which is the case the entailment's ∀ϕ ∈ Φ premise says nothing
-    about.  What buys it is the vacuous-row exclusion in _dominance_closure:
-    measured over 3600 (instance x human x rule) grid trials, the mask changes
-    the answer 0 times and never costs a query, while still saving 2666.
+    UNSOUND.  This hypothesis has been dropped from the paper; --h2 is off by
+    default and the code is kept only so the effect stays reproducible.
+
+    The entailment needs I_G ∈ Φ: the rule holds for every ϕ ∈ Φ, so it carries to
+    the human's own subgoal set only if that set is one of them.  Nothing in the
+    pipeline makes it one — Φ is what the *robot* can achieve maximally, I_G is
+    the bottleneck set of a *human* matrix — so in general only I_G ⊆ ϕ for some
+    ϕ, and the contraposition does not go through.  The vacuous-row exclusion in
+    _dominance_closure narrows the hole but does not close it.
+
+    Do not read "the mask never changes the answer" as evidence for it.  The mask
+    *cannot* change the answer: _grant_entailed_nos only ever adds bits to K_not,
+    which shrinks I_hat and so makes the success test I_hat ⊆ ϕ easier, while a
+    bit granted a NO is never queried again and so keeps K_I smaller, making the
+    failure test K_I ⊄ every ϕ harder.  Both effects point the same way, so a
+    measured 0 is a property of that metric, not a result about H2.
+
+    The invariant that does catch it is the one in the module Notation,
+    K_I ⊆ I_G ⊆ I_hat.  Measured over 330 (instance x human) gridworld episodes
+    under H1, 3x3 rooms of 3 cells, 3 humans, default density: without the mask a
+    NO is granted on a bottleneck actually in I_G 0 times; with the mask, 165
+    times.  In 10 of the 225 successful episodes the robot can then certify a ϕ
+    that omits one of the human's real subgoals, having never asked about it.
 
     Returns (n, n) bool: dom[b2, b1] is True iff b1 ⪯ b2, i.e. ∀ϕ ∈ Φ,
     b1 ∈ ϕ ⇒ b2 ∈ ϕ.  Transitively closed, so one propagation pass suffices.
@@ -1137,6 +1167,12 @@ def _grant_entailed_nos(K_I, K_not, dominance):
     spending a query.  `dominance` is transitively closed, so one pass reaches
     the fixpoint.  Bits already answered YES are left alone: overwriting one
     would forge an answer the oracle never gave.
+
+    This is the line where H2's unsoundness happens: the implication is only
+    valid when I_G ∈ Φ, and when it is not, a bit that belongs to I_G can be set
+    in K_not here — breaking the K_I ⊆ I_G ⊆ I_hat invariant the rest of the
+    module maintains.  Measured at 165 of 330 gridworld episodes.  See
+    build_dominance.
 
     No-op when dominance is None, which is every condition except the "+ H2"
     ones — this is the *only* thing that separates a pair of columns.
@@ -1194,7 +1230,10 @@ def evaluate_policy_on_real_human(
 
     `dominance` is Hypothesis 2(ii), from build_dominance().  It is applied here,
     at inference, and never reaches the policy: the same policy_network run with
-    and without it gives the "X" and "X + H2" columns.
+    and without it gives the "X" and "X + H2" columns.  H2 is unsound and has
+    been dropped from the paper — passing a mask here lowers the query count by
+    granting answers the oracle never gave, so the counts it produces are not
+    comparable with the others.  Leave it None unless reproducing that effect.
 
     Parameters
     ----------
@@ -1205,7 +1244,7 @@ def evaluate_policy_on_real_human(
                        None → "query all", a fresh random order each run.
     n_runs           : int  independent episodes
     I_array          : (len(I), n) bool
-    b_to_int         : {bottleneck: column index} — bottleneck_index(B_filter)
+    b_to_int         : {bottleneck: column index} — bottleneck_index(B)
     c_q, p_i, p_f, gamma : MDP parameters, for the reported reward only; the
         query *count* does not depend on them, since the stopping rule is
         structural.  They must match the ones the policy was solved with.

@@ -24,9 +24,9 @@ Every wall between two neighbouring rooms carries exactly one door, and it is
 **one-way** — east or south only — sitting at the middle of that wall.  Doors are
 shared by the robot and every human, like the start, the goal and the taxi's
 passenger; only the obstacles vary between models.  Drawing a door per model
-instead put each human's mandatory waypoints on different cells, so |B| — the
-union over the humans — grew linearly with the human count and ran past
---max-bottlenecks, which Algorithm 1's 2^|B_filter| cost cannot absorb.
+instead put each human's mandatory waypoints on different cells, so B_nofilter —
+the union over the humans — grew linearly with the human count and ran past
+--max-bottlenecks, which Algorithm 1's 2^|B| cost cannot absorb.
 
 The orientation is the point.  On an open grid a single trajectory can tour every
 bottleneck and come back, so Algorithm 1 always finds exactly one maximally
@@ -35,18 +35,23 @@ room grid a DAG: stepping through a door commits, the doors of the routes not
 taken become unreachable, and |I| grows to the number of monotone routes through
 the room grid (up to 6 for 3x3, 20 for 4x4).
 
---humans is bounded by the same 2^|B_filter| cost, since B is the union over the
-humans.  Measured on the default 3x3 board of 3x3 rooms at the default density,
-over 6 repetitions, the share skipped for exceeding --max-bottlenecks runs 0/6 at
-3 humans, 1/6 at 5, 3/6 at 10 and 6/6 from 20 up (gridworld; taxiworld is one step
-worse at each, its states carrying the passenger flags on top of the cells).  So
-10 is where it starts costing repetitions and 20 is where nothing survives.
-Overcooked is unaffected — its bottlenecks come from recipes, not maps.
+--humans is bounded by the same 2^|B| cost, since B_nofilter is the union over
+the humans.  An instance that busts --max-bottlenecks is no longer skipped: it is
+thrown away and *redrawn* from a fresh seed until one fits, so every
+configuration reports the full --num-simu repetitions instead of however many
+happened to survive.  The price is that the maps are now sampled conditioned on
+|B| <= --max-bottlenecks, which favours the ones with fewer mandatory waypoints;
+`n_draws` is the mean number of maps drawn per repetition and is what makes that
+conditioning visible (1.0 means the cap never bound).  Raising --humans therefore
+costs draws rather than repetitions.  Overcooked is unaffected — its bottlenecks
+come from recipes, not maps.
 
 Five conditions per repetition: the four selection rules (VI, H1 Info Gain,
 H3 Goal Proximity, H4 Query Frequency), plus the random-order "query all"
-control.  --h2 adds a second run of each rule wearing the H2 dominance mask,
-for nine conditions; without the flag the mask is never built.
+control.  --h2 adds a second run of each rule wearing the H2 dominance mask, for
+nine conditions; without the flag the mask is never built.  H2 is unsound and was
+dropped from the paper — see bottlenecks.build_dominance — so the flag exists to
+reproduce the effect, not to report numbers.
 
 Writes two files into results/ , one row per combination:
     compute_times.csv   mean wall-clock time of every pipeline stage
@@ -54,7 +59,7 @@ Writes two files into results/ , one row per combination:
 
 and two plots rendered from those same CSVs:
     query_counts.png    one subplot per configuration, one bar per condition
-    compute_times.png   n_reachable, |I|, |B_filter| and wall-clock time
+    compute_times.png   n_reachable, |I|, |B| and wall-clock time
 
 All defaults (num_simu, sizes, humans, ...) live in parse_args() below.
 """
@@ -95,7 +100,8 @@ from overcooked_env import (
     build_stochastic_matrix as overcooked_stochastic_matrix,
 )
 from gridworld_core import (build_stochastic_matrix as grid_stochastic_matrix,
-                            board_side)
+                            board_side, status_line, set_status_sink,
+                            RETRY_REPORT_EVERY)
 # Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
 # directly instead of a stochastic MDP to determinize: there is no
 # augment_mdp_to_deterministic step, the matrices are already
@@ -130,6 +136,10 @@ from bottlenecks import (
 # policy object and differ only in whether the mask is passed.  With --h2 off the
 # mask is never built, and the CSV fields, plots and summary all follow the
 # condition list the run actually used.
+#
+# H2 is unsound and no longer in the paper.  The "+ H2" columns are lower than
+# their twins because the mask answers questions the oracle was never asked, not
+# because it asks better ones — do not read the gap as a saving.
 BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
 
 
@@ -185,7 +195,8 @@ def _quiet():
 
 
 def build_grid_instance(game, room_side, num_humans, seed=None, obstacle_density=0.1,
-                        puddle_density=0.2, rock_density=0.3, rooms_per_side=3):
+                        puddle_density=0.2, rock_density=0.3, rooms_per_side=3,
+                        slip_prob=0.0):
     """Generate + determinize one grid-domain instance.
 
     ``room_side`` is the side of one **room**, which is what --room-sides sweeps;
@@ -198,7 +209,7 @@ def build_grid_instance(game, room_side, num_humans, seed=None, obstacle_density
     kwargs = dict(num_humans=num_humans, seed=seed,
                   obstacle_density=obstacle_density,
                   rooms_per_side=rooms_per_side, room_side=room_side,
-                  verbose=False, visualize=False)
+                  slip_prob=slip_prob, verbose=False, visualize=False)
     t0 = time.perf_counter()
     with _quiet():
         if game == "gridworld":
@@ -262,12 +273,139 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Drawing an instance the pipeline can actually afford
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_bottleneck_sets(T_R, T_H_list, start_state, goal_state,
+                            filter_toboggans):
+    """The per-human bottleneck sets, their union, the query set, and the timings.
+
+    Split out of run_instance because the caller needs |B| *before* it commits to
+    an instance: one whose query set busts --max-bottlenecks is thrown away and
+    redrawn, and deciding that takes exactly these three stages and nothing after
+    them.  Handing the timings back with the sets is what lets the accepted
+    draw's stage columns hold real numbers instead of being recomputed and
+    re-timed inside run_instance.
+
+    Returns (oracle_sets, B_nofilter, B, stage_times)
+      oracle_sets  one frozenset per candidate human — the Oracle's ensemble, and
+                   the pool the evaluated human is drawn from
+      B_nofilter   their union, before the toboggan filter
+      B            the query set: what the robot may ask about, and the bit order
+                   every policy and I_array agree on.  Equal to B_nofilter unless
+                   `filter_toboggans`, which only Overcooked sets
+      stage_times  {t_bottlenecks, t_oracle_sets, t_toboggan_filter}
+    """
+    # B_nofilter comes from the *candidate humans*, not from T_R.  Sourcing it
+    # from T_R makes every bottleneck a dominator of T_R, hence trivially
+    # achievable, hence |I| == 1 for any reversible domain.  Achievability is
+    # still tested against T_R: "which of these waypoints can the robot visit,
+    # and together?"
+    #
+    # One dominator pass, two products: the per-matrix sets and their union.
+    # t_bottlenecks therefore carries the whole cost and t_oracle_sets only the
+    # union that falls out of it.
+    times = {}
+    t0 = time.perf_counter()
+    with _quiet():
+        oracle_sets = compute_bottlenecks_per_matrix(T_H_list, start_state, goal_state)
+    times["t_bottlenecks"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    # A human that cannot reach the goal at all still contributes {goal_state}:
+    # extract_bottlenecks always includes it.  goal_state is a bottleneck of
+    # every solvable matrix anyway, so the union is unchanged unless *every*
+    # human is unsolvable.
+    B_nofilter = sorted(set().union(*oracle_sets)) if oracle_sets else []
+    times["t_oracle_sets"] = time.perf_counter() - t0
+
+    if filter_toboggans:
+        t0 = time.perf_counter()
+        with _quiet():
+            B = remove_toboggan_redundancies(T_R, B_nofilter, goal_state)
+        times["t_toboggan_filter"] = time.perf_counter() - t0
+    else:
+        B = B_nofilter
+        times["t_toboggan_filter"] = float("nan")
+
+    return oracle_sets, B_nofilter, B, times
+
+
+# An instance whose query set busts --max-bottlenecks used to be skipped
+# outright, which cost up to 31 of 50 repetitions on taxiworld and left each
+# configuration averaging over a different, unstated number of episodes.  It is
+# redrawn instead, and only a repetition that cannot find a usable map in this
+# many draws is given up on.
+MAX_INSTANCE_TRIES = 100_000
+
+# Draw n reuses the repetition seed offset by n * this stride.  A redraw has to
+# change the seed at all — every builder reseeds `random`/`numpy` from the seed it
+# is handed, so redrawing with the same one would rebuild the identical map for
+# ever and the loop would spin to MAX_INSTANCE_TRIES without ever varying.  The
+# stride is larger than any (job_idx * num_simu + rep) a run can produce, so a
+# redraw can never land on another repetition's seed and collapse two
+# repetitions onto one map, which is the whole reason they are seeded apart.
+RETRY_SEED_STRIDE = 1_000_003
+
+
+def draw_instance_under_cap(game, room_side, num_humans, seed, args,
+                            max_bottlenecks, max_tries=MAX_INSTANCE_TRIES):
+    """Draw instances until one's query set fits under `max_bottlenecks`.
+
+    Returns (instance, bundle, t_build, t_rejected, n_draws).  `instance` is None
+    when all `max_tries` draws came back too big, which skips the repetition —
+    the one case left where a repetition produces no episode.
+
+    `t_build` times the accepted draw alone, so it still means "what one instance
+    costs to build" and stays comparable with runs made before redrawing existed.
+    Everything burned on the rejected draws — their builds *and* their bottleneck
+    passes — is reported separately, as `t_rejected`.
+
+    Sampling note: conditioning on |B| <= max_bottlenecks is not free.  The maps
+    that survive are the ones with fewer mandatory waypoints, so every mean the
+    run reports describes that conditioned population rather than the raw one.
+    `n_draws` is what makes the strength of the conditioning readable.
+    """
+    filter_toboggans = (game == "overcooked")
+    t_rejected = 0.0
+    for attempt in range(max_tries):
+        if attempt and attempt % RETRY_REPORT_EVERY == 0:
+            status_line(f"draw {attempt:,}/{max_tries:,} before skipping the config")
+        t0 = time.perf_counter()
+        attempt_seed = seed + attempt * RETRY_SEED_STRIDE
+        if game == "overcooked":
+            instance, t_build = build_overcooked_instance(
+                num_humans=num_humans, allow_drop=args.overcooked_allow_drop,
+                seed=attempt_seed)
+        else:
+            instance, t_build = build_grid_instance(
+                game, room_side, num_humans, seed=attempt_seed,
+                obstacle_density=args.obstacle_density,
+                puddle_density=args.puddle_density,
+                rock_density=args.rock_density,
+                rooms_per_side=args.rooms_per_side,
+                slip_prob=args.slip_prob)
+        # instance is a 5-tuple for the grid games and a 4-tuple for Overcooked,
+        # but the first four slots are the same four things in both.
+        bundle = compute_bottleneck_sets(instance[0], instance[1], instance[2],
+                                         instance[3], filter_toboggans)
+        if len(bundle[2]) <= max_bottlenecks:
+            status_line(None)
+            return instance, bundle, t_build, t_rejected, attempt + 1
+        # Too big: this instance and its matrices go out of scope here and the
+        # next iteration builds a fresh one over them.  Only the cost survives.
+        t_rejected += time.perf_counter() - t0
+    status_line(None)
+    return None, None, float("nan"), t_rejected, max_tries
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The experiment — one repetition: one instance in, one timing row out
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
-                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=18,
-                 use_h2=False):
+                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=17,
+                 use_h2=False, bottleneck_bundle=None):
     # mdp_R feeds Hypothesis 3's value iteration:
     #   * a robot MDP object (grid games) → reward-driven V_R;
     #   * None (Overcooked, which has no MDP object) → the stochastic matrix is
@@ -279,35 +417,42 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
 
       * the **hypothesis space** I — the maximally achievable subsets returned by
         Algorithm 1.  These are the candidate answers: "the human wants I_k".
-      * the **query set** B_filter — what the robot is allowed to ask about.
+      * the **query set** B — what the robot is allowed to ask about.
 
-    B_filter is passed to solve_query_mdp_exact explicitly rather than being
-    inferred from the labels present in I.  The difference is real: a bottleneck
-    in B_filter that appears in no I_k can still be queried, and answering YES to
-    it proves the human is incompatible with every hypothesis (failure), while
-    answering NO is required before any hypothesis can be certified (success).
-    Inferring it from I would silently drop exactly those bottlenecks.
+    B is passed to solve_query_mdp_exact explicitly rather than being inferred
+    from the labels present in I.  The difference is real: a bottleneck in B that
+    appears in no I_k can still be queried, and answering YES to it proves the
+    human is incompatible with every hypothesis (failure), while answering NO is
+    required before any hypothesis can be certified (success).  Inferring it from
+    I would silently drop exactly those bottlenecks.
 
-    It is B_filter, not the raw union B: the exact solver allocates
-    3^|B_filter| knowledge states, and |B| reaches ~44 on Overcooked (3^44 ≈
-    10^21) against |B_filter| ~14 (3^14 ≈ 4.8M).  The toboggan filter is what
-    makes the exact solve possible at all.
+    It is B, not the unfiltered union B_nofilter: the exact solver allocates 3^|B|
+    knowledge states, and |B_nofilter| reaches ~44 on Overcooked (3^44 ≈ 10^21)
+    against |B| ~14 (3^14 ≈ 4.8M).  The toboggan filter is what makes the exact
+    solve possible at all.
+
+    bottleneck_bundle : tuple or None
+        The (oracle_sets, B_nofilter, B, stage_times) compute_bottleneck_sets
+        returns.  main() passes it in because it already had to compute |B| to
+        decide whether to keep this instance at all; None recomputes it, which is
+        the standalone path for running one instance with no redraw loop around
+        it.
 
     max_bottlenecks : int
-        Abandon the repetition when the bottleneck set is larger than this.
-        Algorithm 1 is an include/exclude DFS over 2^|B| subsets, so a model
-        that produces many bottlenecks can stall the whole sweep.  The test is
-        applied to B_filter — i.e. *after* the toboggan filter for Overcooked,
-        which is the only game that runs it — so a set that the filter brings
-        back under the cap is still processed.
+        Abandon the repetition when the query set is larger than this.
+        Algorithm 1 is an include/exclude DFS over 2^|B| subsets, so a model that
+        produces many bottlenecks can stall the whole sweep.  Under main() this
+        is unreachable — draw_instance_under_cap redraws until the instance fits,
+        so run_instance is only ever handed one that already passed — and it
+        stays as the guard on the standalone path.
 
     filter_toboggans : bool
-        Run remove_toboggan_redundancies between B and Algorithm 1.  Only
-        Overcooked uses it — its bottleneck set is full of forced chains
+        Run remove_toboggan_redundancies between B_nofilter and Algorithm 1.
+        Only Overcooked uses it — its bottleneck set is full of forced chains
         (31 raw states collapse to 10 real decision nodes), whereas the grid
         domains have few enough bottlenecks that the filter mostly just costs
-        time.  When False, Algorithm 1 runs on the raw B, `n_B_filter` equals
-        `n_B` and `t_toboggan_filter` is NaN to mark the stage as not run.
+        time.  When False, Algorithm 1 runs on the unfiltered union, `n_B` equals
+        `n_B_nofilter` and `t_toboggan_filter` is NaN to mark the stage as not run.
 
     sto_builder : callable or None
         Zero-argument builder returning (T_R_sto, index) — the robot's stochastic
@@ -318,7 +463,8 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     use_h2 : bool
         Add the "+ H2" twin of every selection rule.  Off by default: the
         dominance mask is not even built, and neither `t_dominance` nor any
-        `*_h2` column appears in the returned row or counts.
+        `*_h2` column appears in the returned row or counts.  H2 is unsound and
+        no longer in the paper — see bottlenecks.build_dominance.
 
     Returns (row, counts, success): `row` holds the problem sizes and per-stage
     times, `counts` maps each of the run's conditions to the queries that condition needed
@@ -327,8 +473,8 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     path has this same arity, so main() can unpack it unconditionally.
 
     `success` is deliberately a single flag rather than one per policy: an
-    episode succeeds iff the drawn human's bottleneck set (restricted to the
-    B_filter) is contained in some subset of I, which is a property of the
+    episode succeeds iff the drawn human's bottleneck set (restricted to B) is
+    contained in some subset of I, which is a property of the
     instance and is therefore the same for every condition.  The individual
     episodes' own flags are discarded for that reason.
 
@@ -347,69 +493,47 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     row: dict = {"n_states": int(T_R.shape[0]), "n_actions": int(T_R.shape[1]),
                  "n_humans": len(T_H_list), "n_reachable": float("nan")}
 
-    # B comes from the *candidate humans*, not from T_R.  Sourcing it from T_R
-    # makes every bottleneck a dominator of T_R, hence trivially achievable,
-    # hence |I| == 1 for any reversible domain.  Achievability below is still
-    # tested against T_R: "which of these waypoints can the robot visit, and
-    # together?"
-    #
-    # One dominator pass, two products: the per-matrix sets (the Oracle's
-    # ensemble, and the pool the evaluated human is drawn from) and their union
-    # B.  t_bottlenecks therefore carries the whole cost and t_oracle_sets only
-    # the union that falls out of it.
-    t0 = time.perf_counter()
-    with _quiet():
-        oracle_sets = compute_bottlenecks_per_matrix(T_H_list, start_state, goal_state)
-    row["t_bottlenecks"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    # A human that cannot reach the goal at all still contributes {goal_state}:
-    # extract_bottlenecks always includes it.  goal_state is a bottleneck of
-    # every solvable matrix anyway, so the union is unchanged unless *every*
-    # human is unsolvable.
-    B = sorted(set().union(*oracle_sets)) if oracle_sets else []
-    row["t_oracle_sets"] = time.perf_counter() - t0
-
-    if filter_toboggans:
-        t0 = time.perf_counter()
-        with _quiet():
-            B_filter = remove_toboggan_redundancies(T_R, B, goal_state)
-        row["t_toboggan_filter"] = time.perf_counter() - t0
-    else:
-        B_filter = B
-        row["t_toboggan_filter"] = float("nan")
+    # Normally precomputed: main() has to know |B| *before* it accepts an
+    # instance, so it runs these three stages itself and hands the result down
+    # rather than paying for them twice.  Recomputing is the standalone path.
+    if bottleneck_bundle is None:
+        bottleneck_bundle = compute_bottleneck_sets(T_R, T_H_list, start_state,
+                                                    goal_state, filter_toboggans)
+    oracle_sets, B_nofilter, B, stage_times = bottleneck_bundle
+    row.update(stage_times)
 
     # Safety valve: bail out before Algorithm 1 rather than after, since it is
-    # the 2^|B| stage that would hang.
-    if len(B_filter) > max_bottlenecks:
-        tqdm.write(f"skipping repetition: {len(B_filter)} bottlenecks > {max_bottlenecks}")
-        row.update({"n_B": len(B), "n_B_filter": len(B_filter),
+    # the 2^|B| stage that would hang.  Unreachable under main(), which redraws
+    # until the instance fits; this is the standalone path's guard.
+    if len(B) > max_bottlenecks:
+        tqdm.write(f"skipping repetition: {len(B)} bottlenecks > {max_bottlenecks}")
+        row.update({"n_B_nofilter": len(B_nofilter), "n_B": len(B),
                     "n_I": float("nan"), "n_columns": float("nan")})
         # t_bottlenecks and t_oracle_sets already ran and hold real values —
         # only the stages that never got a chance to run are NaN'd here.
         for stage in ["t_algorithm1"] + unrun_stages:
             row[stage] = float("nan")
-        row["skipped"] = f"{len(B_filter)} bottlenecks > {max_bottlenecks}"
+        row["skipped"] = f"{len(B)} bottlenecks > {max_bottlenecks}"
         return row, {c: float("nan") for c in conditions}, float("nan")
 
     t0 = time.perf_counter()
     with _quiet():
-        I = find_maximally_achievable_subsets(B_filter, T_R, start_state,
+        I = find_maximally_achievable_subsets(B, T_R, start_state,
                                               goal_state, verbose=False)
     row["t_algorithm1"] = time.perf_counter() - t0
 
-    # The query set: everything the robot may ask about.  It is B_filter, *not*
-    # the labels occurring in I — see the docstring.  The same ordering goes to
+    # The query set: everything the robot may ask about.  It is B, *not* the
+    # labels occurring in I — see the docstring.  The same ordering goes to
     # solve_query_mdp_exact, so action indices and I_array columns mean the same
     # bottleneck; letting the solver infer its own order would desynchronise them.
-    I_array  = subsets_to_array(I, B_filter)
-    b_to_int = bottleneck_index(B_filter)
+    I_array  = subsets_to_array(I, B)
+    b_to_int = bottleneck_index(B)
 
-    row.update({"n_B": len(B), "n_B_filter": len(B_filter),
-                "n_I": len(I), "n_columns": len(B_filter)})
+    row.update({"n_B_nofilter": len(B_nofilter), "n_B": len(B),
+                "n_I": len(I), "n_columns": len(B)})
 
     # ── Query MDP ────────────────────────────────────────────────────────────
-    n = len(B_filter)
+    n = len(B)
     if n == 0:
         for stage in unrun_stages:
             row[stage] = float("nan")
@@ -441,14 +565,14 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     else:
         t0 = time.perf_counter()
         with _quiet():
-            policies["strategic_exact"] = solve_query_mdp_exact(I, B_filter, oracle=oracle)
+            policies["strategic_exact"] = solve_query_mdp_exact(I, B, oracle=oracle)
         base_solve["strategic_exact"] = time.perf_counter() - t0
 
     for name, solver in (("info_gain", solve_query_mdp_info_gain),
                          ("frequency", solve_query_mdp_frequency)):
         t0 = time.perf_counter()
         with _quiet():
-            policies[name] = solver(I, B_filter, oracle=oracle)
+            policies[name] = solver(I, B, oracle=oracle)
         base_solve[name] = time.perf_counter() - t0
 
     # Proximity carries its own value iteration: H3 depends on V_R, so building
@@ -470,7 +594,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                 np.asarray(T_R, dtype=np.int64), int(start_state))
             V_R = value_iteration(T_R_sto, sto_index[int(goal_state)])
         policies["proximity"] = solve_query_mdp_proximity(
-            I, B_filter, oracle=oracle, V_R=V_R, state_index=sto_index)
+            I, B, oracle=oracle, V_R=V_R, state_index=sto_index)
     base_solve["proximity"] = time.perf_counter() - t0
     # The pruned side of T_R_sto: how big the value iteration really was, as
     # against n_states, which is how big the game's state space is on paper.
@@ -482,7 +606,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     if use_h2:
         t0 = time.perf_counter()
         with _quiet():
-            dominance = build_dominance(I, B_filter)
+            dominance = build_dominance(I, B)
         t_dominance = time.perf_counter() - t0
         row["t_dominance"] = t_dominance
 
@@ -509,10 +633,13 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         row[f"t_sim_{name}"] = time.perf_counter() - t0
         # Read the flag off a condition that does not wear H2.  Every condition
         # reports the same one: success means the drawn human is representable in
-        # I, a property of the instance rather than of the rule.  Sourcing it from
-        # a plain condition keeps that a verified property — if H2 ever did change
-        # an answer, n_failure would show it instead of hiding
-        # it behind the last condition in CONDITIONS.
+        # I, a property of the instance rather than of the rule.
+        #
+        # Sourcing it from a plain condition is *not* a check on H2 — the success
+        # flag cannot detect H2's unsoundness at all, since the mask only ever
+        # adds K_not bits, which shrinks I_hat and makes the success test easier
+        # and the failure test harder.  It is only to keep this column meaning
+        # the instance's property rather than the last condition's.
         if not name.endswith("_h2"):
             success = flag
 
@@ -545,8 +672,13 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None
 # added into each of them.  t_dominance is that shared piece reported once on its
 # own, so it is *not* a term to add to a total — the t_solve_* columns already
 # count it four times, deliberately.  It appears only when H2 runs.
-STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans",
-               "n_B", "n_B_filter", "n_I", "n_columns"]
+#
+# n_draws and t_rejected are the redraw loop's accounting: how many instances had
+# to be built to get one under --max-bottlenecks, and what the discarded ones
+# cost.  t_build stays the accepted draw alone, so it means the same thing it
+# always did and t_build + t_rejected is the true cost of arriving at an instance.
+STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans", "n_draws",
+               "n_B_nofilter", "n_B", "n_I", "n_columns"]
 
 
 def column_layout(use_h2):
@@ -566,7 +698,7 @@ def column_layout(use_h2):
     solve_times = [f"t_solve_{c}" for c in conditions if c != "query_all"]
     sim_times   = [f"t_sim_{c}"   for c in conditions]
 
-    stage_times = (["t_build", "t_bottlenecks", "t_toboggan_filter",
+    stage_times = (["t_build", "t_rejected", "t_bottlenecks", "t_toboggan_filter",
                     "t_algorithm1", "t_oracle_sets"]
                    + (["t_dominance"] if use_h2 else [])
                    + solve_times + sim_times + ["t_total"])
@@ -626,33 +758,46 @@ def parse_args(argv=None):
                         "matches PuddleWorld's own default)")
     p.add_argument("--rock-density", type=float, default=0.3,
                    help="rock density, rockworld only (default: 0.3)")
+    p.add_argument("--slip-prob", type=float, default=0.0,
+                   help="probability of slipping into each unintended neighbour "
+                        "on a move, for the four grid games; 0 makes every move "
+                        "deterministic, so determinization is a no-op and the "
+                        "augmented action set stays the 4 real moves instead of "
+                        "growing to ~20 (default: 0.0)")
 
     # ── Which conditions to report ───────────────────────────────────────────
     p.add_argument("--h2", action="store_true",
                    help="also run every rule wearing the H2 dominance mask, "
-                        "doubling the four rule columns to eight (default: off)")
+                        "doubling the four rule columns to eight.  H2 is UNSOUND "
+                        "and was dropped from the paper — it lowers query counts "
+                        "by granting answers the oracle never gave, so its "
+                        "columns are not comparable with the others (default: off)")
 
     # ── Cost ceilings ────────────────────────────────────────────────────────
     # Maintainer's note, deliberately not in the help text below: it is about the
     # two default *values*, so its reader is whoever edits them.
     #
-    # The caps guard different stages: Algorithm 1 is a 2^n DFS (2^18 = 262k
-    # subsets, cheap), the exact Query MDP allocates 3^n knowledge states.  A
-    # repetition can clear Algorithm 1 and still skip the exact solve.
+    # The caps guard different stages: Algorithm 1 is a 2^n DFS (2^17 = 131k
+    # subsets, cheap), the exact Query MDP allocates 3^n knowledge states.  They
+    # are now the same number, so an instance accepted at all can also be solved
+    # exactly; while they differed (18 against 17) a repetition could clear
+    # Algorithm 1 and then skip the VI baseline, leaving that column averaged
+    # over a different subset of repetitions than the greedy ones.
     #
-    # Both are sized so Overcooked never skips at the default MDP: over 160
-    # instances (40 seeds x 5/10/20/30 humans) the toboggan filter put |B_filter|
-    # in 4..17, so 18 and 17 are the observed ceilings.  The 17 is expensive —
-    # one n=17 solve costs ~29 s and ~4.7 GB peak against ~0.08 s at n=13 — so
-    # lower --max-exact-n to trade completed repetitions for speed.
+    # Both are sized so Overcooked never redraws at the default MDP: over 160
+    # instances (40 seeds x 5/10/20/30 humans) the toboggan filter put |B| in
+    # 4..17, so 17 is the observed ceiling.  It is expensive — one n=17 solve
+    # costs ~29 s and ~4.7 GB peak against ~0.08 s at n=13 — so lower
+    # --max-bottlenecks to trade draws for speed.
     #
     # Do not raise --max-exact-n to 18 without testing it alone first: 3^18
     # extrapolates to ~14 GB.  And --overcooked-allow-drop roughly doubles the
-    # filtered set (~36), which no cap value brings back into reach.
-    p.add_argument("--max-bottlenecks", type=int, default=18,
-                   help="skip a repetition whose bottleneck set exceeds this, "
+    # filtered set (~36), which no cap value brings back into reach — there the
+    # redraw loop cannot help either, since every draw busts the cap.
+    p.add_argument("--max-bottlenecks", type=int, default=17,
+                   help="redraw an instance whose query set exceeds this, "
                         "measured after the toboggan filter; Algorithm 1 is a "
-                        "2^|B| search (default: 18)")
+                        "2^|B| search (default: 17)")
     p.add_argument("--max-exact-n", type=int, default=17,
                    help="skip the exact Query MDP above this many bottlenecks, "
                         "since it allocates 3^n arrays; n=17 costs ~29 s and "
@@ -763,7 +908,14 @@ def main(argv=None):
         # wants, and what every other size in the output refers to.
         board = None if room_side is None else board_side(args.rooms_per_side, room_side)
         label = game if board is None else f"{game} {board}x{board}"
-        bar.set_postfix_str(f"{label}, {num_humans} humans")
+        # Retry status lands in the bar's own postfix, which already redraws in
+        # place: a 100 000-draw loop then costs no scrollback and no second writer
+        # competes with the bar for the line.  The job label stays as the prefix,
+        # so the bar never stops saying which configuration it is running.
+        postfix = f"{label}, {num_humans} humans"
+        bar.set_postfix_str(postfix)
+        set_status_sink(lambda text, p=postfix:
+                        bar.set_postfix_str(p if text is None else f"{p} | {text}"))
 
         reps, counts_per_rep, successes = [], [], []
         for rep in range(args.num_simu):
@@ -774,28 +926,41 @@ def main(argv=None):
             np.random.seed(seed)
 
             t_start = time.perf_counter()
-            if game == "overcooked":
-                instance, t_build = build_overcooked_instance(
-                    num_humans=num_humans, allow_drop=args.overcooked_allow_drop, seed=seed)
-            else:
-                instance, t_build = build_grid_instance(
-                    game, room_side, num_humans, seed=seed,
-                    obstacle_density=args.obstacle_density,
-                    puddle_density=args.puddle_density,
-                    rock_density=args.rock_density,
-                    rooms_per_side=args.rooms_per_side)
+            instance, bundle, t_build, t_rejected, n_draws = draw_instance_under_cap(
+                game, room_side, num_humans, seed, args, args.max_bottlenecks)
 
-            row, counts, success = run_instance(
-                *instance, max_exact_n=args.max_exact_n,
-                filter_toboggans=(game == "overcooked"),
-                max_bottlenecks=args.max_bottlenecks, use_h2=args.h2)
-            row["t_build"] = t_build
-            row["t_total"] = time.perf_counter() - t_start
+            if instance is None:
+                note = (f"no instance under {args.max_bottlenecks} bottlenecks "
+                        f"in {MAX_INSTANCE_TRIES:,} draws")
+                tqdm.write(f"skipping repetition: {note}")
+                row = {f: float("nan") for f in STAGE_SIZES + stage_times}
+                row["n_humans"] = num_humans
+                row["skipped"] = note
+                counts  = {c: float("nan") for c in conditions}
+                success = float("nan")
+            else:
+                # The evaluated human is drawn inside run_instance off the global
+                # numpy stream.  Reseeding with the *repetition* seed here keeps
+                # that draw tied to the repetition rather than to whichever draw
+                # happened to be accepted, so which human is evaluated does not
+                # silently depend on how many maps were rejected first.
+                random.seed(seed)
+                np.random.seed(seed)
+                row, counts, success = run_instance(
+                    *instance, max_exact_n=args.max_exact_n,
+                    filter_toboggans=(game == "overcooked"),
+                    max_bottlenecks=args.max_bottlenecks, use_h2=args.h2,
+                    bottleneck_bundle=bundle)
+            row["t_build"]    = t_build
+            row["t_rejected"] = t_rejected
+            row["n_draws"]    = n_draws
+            row["t_total"]    = time.perf_counter() - t_start
 
             reps.append(row)
             counts_per_rep.append(counts)
             successes.append(success)
             bar.update(1)
+        set_status_sink(None)
 
         # room_side = what --room-sides asked for; board_side = what it built.
         # Overcooked has neither, so both stay blank for it.
@@ -927,11 +1092,11 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
                         each doubled when `conditions` carries its "+ H2" twin,
                         plus Random.  Per-config subplots rather than
                         one shared axis because the configurations differ by an
-                        order of magnitude in |B_filter|, and a shared y-axis
+                        order of magnitude in |B|, and a shared y-axis
                         flattens the small ones into indistinguishable stubs.
     compute_times.png  2x2 grid: the value iteration's matrix side
                         (n_reachable), hypothesis-space cardinality (n_I),
-                        problem size (|B_filter|), and mean wall-clock time — so
+                        problem size (|B|), and mean wall-clock time — so
                         the cost of a combination can be read against where it
                         started and what it was solving for.
 
@@ -1042,7 +1207,7 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     axes[0, 1].set_title("Hypothesis-space cardinality (Algorithm 1 output)")
     _rotate_xticks(axes[0, 1], labels_t, x_t)
 
-    axes[1, 0].bar(x_t, df_t["n_B_filter"], color="steelblue")
+    axes[1, 0].bar(x_t, df_t["n_B"], color="steelblue")
     axes[1, 0].set_ylabel("|B|")
     axes[1, 0].set_title("Problem size")
     _rotate_xticks(axes[1, 0], labels_t, x_t)
@@ -1067,14 +1232,14 @@ def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
              "proximity": "H3", "frequency": "H4"}
     short.update({f"{b}_h2": f"{short[b]}+2" for b in BASES})
     header = "".join(f"{short[c]:>8}" for c in conditions)
-    print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B_f|':>7}{header}{'time(s)':>10}")
+    print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):
         if q["n_episodes"]:
             queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in conditions)
         else:
             queries = f"{row['skipped']:>{8 * len(conditions)}}"
         print(f"{row['game']:<12}{str(row['board_side']):>6}{row['num_humans']:>5}"
-              f"{row['n_B_filter']:>7.1f}{queries}{row['t_total']:>10.2f}")
+              f"{row['n_B']:>7.1f}{queries}{row['t_total']:>10.2f}")
 
 
 if __name__ == "__main__":

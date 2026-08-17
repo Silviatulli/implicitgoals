@@ -7,8 +7,9 @@ This module is the only place where the *rules of the game* live — recipes,
 the inventory / pot bit-packing, the kitchen grid, and which states carry a
 serving edge.  It produces transition matrices and nothing else.
 
-Everything computed *from* a transition matrix (bottlenecks B, the filtered set
-B_filter, the maximally achievable subsets I, I_array, the Query MDP) lives in
+Everything computed *from* a transition matrix (the raw bottleneck union
+B_nofilter, the filtered query set B, the maximally achievable subsets I,
+I_array, the Query MDP) lives in
 the shared, game-agnostic bottlenecks.py at the repo root, which works on the
 matrices alone and has no notion of a recipe.
 

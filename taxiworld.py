@@ -8,8 +8,9 @@ and rockworld.py — see that module for the shared plumbing).
 
 TaxiWorld is a GridWorld where a taxi must pick up a passenger and drop it at a
 destination. A state is ``[(row, col), passenger_in_taxi, delivered]`` and the
-action set adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves slip
-(10%); pickup / dropoff are deterministic.
+action set adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves slip with
+probability ``slip_prob`` per unintended neighbour, 0 by default; pickup /
+dropoff are always deterministic.
 
 ``delivered`` latches True only on a dropoff at the destination while carrying,
 and never resets, so the goal ``[destination, False, True]`` means "task
@@ -35,7 +36,7 @@ import random
 import numpy as np
 
 from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
-                            seeded_rng)
+                            seeded_rng, DEFAULT_MAX_TRIES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +51,8 @@ class TaxiWorld(GridWorld):
     "standing on the destination"."""
 
     def __init__(self, start=None, passenger_loc=None, destination=None,
-                 obstacle_density=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
+                 obstacle_density=0.1, slip_prob=0.0, discount=0.99,
+                 max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1, wrong_dropoff_penalty=-10,
                  rooms_per_side=1, room_side=5):
         # The passenger is drawn before GridWorld.__init__ runs, so this world has
@@ -236,7 +238,7 @@ class TaxiWorld(GridWorld):
 def generate_and_visualize_taxiworld(start, goal, obstacle_density,
                                      model_type="Model", obstacle_seed=None,
                                      passenger_loc=None, destination=None,
-                                     rooms_per_side=1, room_side=5):
+                                     rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate a single-passenger ``TaxiWorld``.
 
     ``destination`` defaults to ``goal`` (or the bottom-right corner); the
@@ -252,7 +254,7 @@ def generate_and_visualize_taxiworld(start, goal, obstacle_density,
     return TaxiWorld(start=start, passenger_loc=passenger_loc,
                      destination=destination, obstacle_density=obstacle_density,
                      obstacle_seed=obstacle_seed, rooms_per_side=rooms_per_side,
-                     room_side=room_side)
+                     room_side=room_side, slip_prob=slip_prob)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,7 +262,8 @@ def generate_and_visualize_taxiworld(start, goal, obstacle_density,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_determinized(obstacle_density, model_type, visualize=False,
-                       passenger_loc=None, rooms_per_side=1, room_side=5):
+                       passenger_loc=None, rooms_per_side=1, room_side=5,
+                       slip_prob=0.0):
     """Generate one taxi world and determinize it; returns (next_states, s0, g, det_time).
 
     ``passenger_loc`` is passed down so every model of an instance shares it; see
@@ -272,7 +275,7 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density, passenger_loc=passenger_loc,
         rooms_per_side=rooms_per_side,
-        room_side=room_side,
+        room_side=room_side, slip_prob=slip_prob,
         model_type=model_type, obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
@@ -286,7 +289,7 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
                                  seed=None, verbose=True, visualize=False,
-                                 rooms_per_side=1, room_side=4):
+                                 rooms_per_side=1, room_side=4, slip_prob=0.0):
     """Build a robot model + ``num_humans`` human TaxiWorld models and determinize each.
 
     Parameters
@@ -323,11 +326,11 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
 
     robot = _make_determinized(obstacle_density, "Robot Model", visualize,
                                passenger_loc=passenger_loc, rooms_per_side=rooms_per_side,
-                               room_side=room_side)
+                               room_side=room_side, slip_prob=slip_prob)
     humans = [_make_determinized(obstacle_density, f"Human Model {i + 1}",
                                  visualize, passenger_loc=passenger_loc,
                                  rooms_per_side=rooms_per_side,
-                                 room_side=room_side)
+                                 room_side=room_side, slip_prob=slip_prob)
               for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]

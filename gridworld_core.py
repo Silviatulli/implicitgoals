@@ -3,9 +3,14 @@ gridworld_core.py — shared GridWorld MDP base + determinization helper.
 =========================================================================
 
 Shared by gridworld.py / puddleworld.py / rockworld.py / taxiworld.py: the plain
-stochastic 2D grid (``GridWorld``), its BFS helper, and the
-stochastic-to-deterministic MDP conversion (``augment_mdp_to_deterministic``)
-that all four world types use identically.
+2D grid (``GridWorld``), its BFS helper, and the stochastic-to-deterministic MDP
+conversion (``augment_mdp_to_deterministic``) that all four world types use
+identically.
+
+The grid is stochastic only when ``slip_prob > 0``.  It defaults to 0, which
+makes every move deterministic: each unintended outcome has probability exactly
+0.0, so the determinizer's ``> 1e-12`` test drops it and the augmented action set
+stays the four real moves rather than growing to ~20.
 
 Only dependency: ``numpy``.
 """
@@ -14,6 +19,60 @@ from queue import Queue
 from collections import deque
 
 import numpy as np
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retry budget and the transient status line
+# ─────────────────────────────────────────────────────────────────────────────
+# A retry loop allowed 100 000 attempts has to say so *while* it runs, without
+# leaving 100 lines of scrollback behind and without fighting a tqdm bar over the
+# terminal.  Both retry loops in the repo — this module's layout search and
+# experiment.py's instance redraw — therefore report through :func:`status_line`,
+# and whoever owns the terminal decides where the text lands:
+#
+#   * experiment.py points the sink at its tqdm bar's postfix, which already
+#     redraws in place: one line, no scrolling, and no second writer competing
+#     for "\r";
+#   * a bare script (``python gridworld.py``) leaves the sink unset and gets a
+#     "\r"-erased line on stdout instead.
+#
+# It is module state rather than a parameter because the alternative is threading
+# a callback through four game modules, two wrapper functions each, and down into
+# ``GridWorld.__init__``.
+
+DEFAULT_MAX_TRIES  = 100_000    # attempts before a retry loop gives up
+RETRY_REPORT_EVERY = 1_000      # ... and how often it says how far along it is
+
+_status_sink  = None
+_status_width = 0
+
+
+def set_status_sink(sink):
+    """Route :func:`status_line` elsewhere; ``None`` restores the stdout line.
+
+    ``sink`` is called with the text to show, or with ``None`` meaning "clear".
+    """
+    global _status_sink
+    _status_sink = sink
+
+
+def status_line(text):
+    """Show ``text`` as a transient one-line status, or clear it when ``None``.
+
+    The stdout fallback pads to the widest line shown so far, so a shorter
+    message cannot leave the tail of a longer one behind it on the terminal.
+    """
+    global _status_width
+    if _status_sink is not None:
+        _status_sink(text)
+        return
+    if text is None:
+        if _status_width:
+            print("\r" + " " * _status_width + "\r", end="", flush=True)
+            _status_width = 0
+        return
+    print("\r" + text.ljust(_status_width), end="", flush=True)
+    _status_width = max(_status_width, len(text))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +151,7 @@ def _bfs_reachable(start_state, goal_test, successor_generator):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The GridWorld game (stochastic 2D grid with slip)
+# The GridWorld game (2D grid, with optional slip — off by default)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GridWorld:
@@ -117,7 +176,7 @@ class GridWorld:
 
     def __init__(self, rooms_per_side=1, room_side=5, start=None, goal=None,
                  obstacle_density=0.1,
-                 slip_prob=0.1, discount=0.99, max_tries=10000,
+                 slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1):
         # Every game reaches the board through here, so this is the one place the
         # geometry is checked.  Unguarded, rooms_per_side=0 builds a 0x0 board in
@@ -150,8 +209,13 @@ class GridWorld:
         valid_config_found = False
         curr_tries = 0
         while not valid_config_found and curr_tries < max_tries:
-            if curr_tries // 1000 > 0:
-                print(f"GridWorld: retry {curr_tries} of {max_tries} to find a valid layout")
+            # Every RETRY_REPORT_EVERY tries, not every try past the first
+            # thousand: the old test was `curr_tries // 1000 > 0`, which printed a
+            # fresh line on all 99 000 remaining attempts.  status_line() also
+            # overwrites itself rather than scrolling — see the module header.
+            if curr_tries and curr_tries % RETRY_REPORT_EVERY == 0:
+                status_line(f"{type(self).__name__}: layout try {curr_tries:,}/"
+                            f"{max_tries:,} before falling back to an empty map")
             self._blank_board()
             # Start and goal first: protected_cells() can only keep obstacles off
             # them if they already exist.
@@ -170,6 +234,7 @@ class GridWorld:
                 valid_config_found = True
             else:
                 curr_tries += 1
+        status_line(None)
 
         if not valid_config_found:
             self._blank_board()
@@ -230,7 +295,7 @@ class GridWorld:
         and every human share them, as they already share the start, the goal and
         TaxiWorld's passenger.  Only the obstacles differ, deliberately: B is the
         *union* of the humans' bottleneck sets, so per-model doors made |B| grow
-        with the human count against an Algorithm 1 costing 2^|B_filter|.  Shared
+        with the human count against an Algorithm 1 costing 2^|B|.  Shared
         doors make the humans disagree about which *route* is forced instead.
         """
         self.state_space = None            # stale once the layout changes
