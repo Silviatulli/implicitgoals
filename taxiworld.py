@@ -8,8 +8,8 @@ and rockworld.py — see that module for the shared plumbing).
 
 TaxiWorld is a GridWorld where a taxi must pick up a passenger and drop it at a
 destination. A state is ``[(row, col), passenger_in_taxi, delivered]`` and the
-action set adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves slip
-(10%); pickup / dropoff are deterministic.
+action set adds ``"pickup"`` / ``"dropoff"`` to the four moves. Moves are
+deterministic (slip_prob=0.0); pickup / dropoff are also deterministic.
 
 ``delivered`` latches True only on a dropoff at the destination while carrying,
 and never resets, so the goal ``[destination, False, True]`` means "task
@@ -50,7 +50,7 @@ class TaxiWorld(GridWorld):
     "standing on the destination"."""
 
     def __init__(self, start=None, passenger_loc=None, destination=None,
-                 obstacle_density=0.1, slip_prob=0.1, discount=0.99, max_tries=100,
+                 obstacle_density=0.1, slip_prob=0.0, discount=0.99, max_tries=100,
                  obstacle_seed=1, wrong_dropoff_penalty=-10,
                  rooms_per_side=1, room_side=5):
         # The passenger is drawn before GridWorld.__init__ runs, so this world has

@@ -59,7 +59,7 @@ class UnlockEnv:
     2=locked. Actions: left/right (rotate), forward (move), toggle (interact
     with the door when standing on it)."""
 
-    def __init__(self, grid_size=5, max_steps=100, slip_prob=0.1,
+    def __init__(self, grid_size=5, max_steps=100, slip_prob=0.0,
                  init_state=None, goal_states=None):
         self.grid_size = grid_size
         self.max_steps = max_steps
@@ -183,7 +183,7 @@ class UnlockPickupEnv:
     the key), pickup (grab the key/box when standing on it, or push the ball
     forward when standing on it)."""
 
-    def __init__(self, grid_size=5, max_steps=100, slip_prob=0.1):
+    def __init__(self, grid_size=5, max_steps=100, slip_prob=0.0):
         self.grid_size = grid_size
         self.max_steps = max_steps
         self.actions = ["left", "right", "forward", "toggle", "pickup"]
@@ -319,7 +319,7 @@ class UnlockPickupEnv:
         print(f"Has box: {'Yes' if self.has_box else 'No'}")
 
 
-def generate_and_visualize_minigridworld(size, task, max_steps=100, slip_prob=0.1, model_type="Model"):
+def generate_and_visualize_minigridworld(size, task, max_steps=100, slip_prob=0.0, model_type="Model"):
     """Build an ``UnlockEnv`` or ``UnlockPickupEnv``, selected by ``task``."""
     if task == "unlock":
         return UnlockEnv(grid_size=size, max_steps=max_steps, slip_prob=slip_prob)
@@ -348,7 +348,7 @@ def _make_determinized(size, task, max_steps, slip_prob, model_type, visualize=F
 
 
 def generate_determinized_models(size=5, num_humans=3, task="unlock", max_steps=100,
-                                 slip_prob=0.1, seed=None, verbose=True, visualize=False):
+                                 slip_prob=0.0, seed=None, verbose=True, visualize=False):
     """Build a robot model + ``num_humans`` human MiniGrid models and determinize each.
 
     Parameters

@@ -92,7 +92,7 @@ def _bfs_reachable(start_state, goal_test, successor_generator):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The GridWorld game (stochastic 2D grid with slip)
+# The GridWorld game (2D grid; deterministic by default, slip_prob=0.0)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GridWorld:
@@ -117,7 +117,7 @@ class GridWorld:
 
     def __init__(self, rooms_per_side=1, room_side=5, start=None, goal=None,
                  obstacle_density=0.1,
-                 slip_prob=0.1, discount=0.99, max_tries=100,
+                 slip_prob=0.0, discount=0.99, max_tries=100,
                  obstacle_seed=1):
         # Every game reaches the board through here, so this is the one place the
         # geometry is checked.  Unguarded, rooms_per_side=0 builds a 0x0 board in

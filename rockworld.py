@@ -65,7 +65,7 @@ class RockWorld(GridWorld):
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
                  rock_density=0.3, valuable_rock_ratio=0.4,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
-                 slip_prob=0.1, discount=0.99, max_tries=100, obstacle_seed=1,
+                 slip_prob=0.0, discount=0.99, max_tries=100, obstacle_seed=1,
                  max_valuable_rocks=MAX_VALUABLE_ROCKS,
                  rooms_per_side=1, room_side=5):
         super().__init__(start=start, goal=goal,

@@ -603,22 +603,23 @@ def parse_args(argv=None):
     # ── What to sweep ────────────────────────────────────────────────────────
     p.add_argument("--games", nargs="+", default=list(ALL_GAMES), choices=list(ALL_GAMES),
                    help="games to run (default: all five)")
-    p.add_argument("--humans", type=int, nargs="+", default=[3, 5],
+    p.add_argument("--humans", type=int, nargs="+", default=[3, 5, 10, 15],
                    help="numbers of candidate human models to sweep; above ~10 most "
                         "repetitions are skipped for exceeding --max-bottlenecks "
-                        "(default: 3 5)")
-    p.add_argument("--num-simu", type=int, default=50,
+                        "(default: 3 5 10 15)")
+    p.add_argument("--num-simu", type=int, default=30,
                    help="repetitions of the whole experiment per combination; every "
                         "reported time and query count is a mean over them "
-                        "(default: 50)")
+                        "(default: 30)")
 
     # ── The board the four grid games are built on ───────────────────────────
     p.add_argument("--rooms-per-side", type=int, default=3,
                    help="rooms per side of the board, joined by one-way doors; "
                         "1 = open board, and |I| = 1 with it (default: 3)")
-    p.add_argument("--room-sides", type=int, nargs="+", default=[3],
+    p.add_argument("--room-sides", type=int, nargs="+", default=[3, 4, 5],
                    help="cells per side of one ROOM, swept; the board is "
-                        "rooms-per-side x this (default: 3)")
+                        "rooms-per-side x this; [3,4,5] gives 9x9, 12x12, 15x15 boards "
+                        "(default: 3 4 5)")
     p.add_argument("--obstacle-density", type=float, default=0.1,
                    help="obstacle density of the four grid games (default: 0.1)")
     p.add_argument("--puddle-density", type=float, default=0.2,
@@ -649,14 +650,14 @@ def parse_args(argv=None):
     # Do not raise --max-exact-n to 18 without testing it alone first: 3^18
     # extrapolates to ~14 GB.  And --overcooked-allow-drop roughly doubles the
     # filtered set (~36), which no cap value brings back into reach.
-    p.add_argument("--max-bottlenecks", type=int, default=18,
+    p.add_argument("--max-bottlenecks", type=int, default=22,
                    help="skip a repetition whose bottleneck set exceeds this, "
                         "measured after the toboggan filter; Algorithm 1 is a "
-                        "2^|B| search (default: 18)")
-    p.add_argument("--max-exact-n", type=int, default=17,
+                        "2^|B| search (default: 22)")
+    p.add_argument("--max-exact-n", type=int, default=18,
                    help="skip the exact Query MDP above this many bottlenecks, "
                         "since it allocates 3^n arrays; n=17 costs ~29 s and "
-                        "~4.7 GB per repetition (default: 17)")
+                        "~4.7 GB per repetition (default: 18)")
 
     # ── Variant, reproducibility, output ─────────────────────────────────────
     p.add_argument("--overcooked-allow-drop", action="store_true",
