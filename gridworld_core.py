@@ -43,6 +43,22 @@ import numpy as np
 DEFAULT_MAX_TRIES  = 100_000    # attempts before a retry loop gives up
 RETRY_REPORT_EVERY = 1_000      # ... and how often it says how far along it is
 
+
+class UnsolvableLayout(RuntimeError):
+    """No solvable board could be laid out at the requested densities.
+
+    Raised by ``GridWorld.__init__`` when its layout search exhausts
+    ``max_tries``.  It is deliberately an error rather than a fallback: the
+    obvious fallback — hand back a board with no obstacles — silently swaps in a
+    *different game* (obstacle density 0) under the density the caller asked
+    for.  A benchmark that averages such a board in reports a mean over a
+    population it never describes, and nothing in the output says so.
+
+    experiment.py catches it and reports the repetition as NaN, counted under
+    ``n_skipped``, so a configuration whose densities are too tight shows up as
+    missing rather than as a suspiciously easy result.
+    """
+
 _status_sink  = None
 _status_width = 0
 
@@ -176,7 +192,7 @@ class GridWorld:
 
     def __init__(self, rooms_per_side=1, room_side=5, start=None, goal=None,
                  obstacle_density=0.1,
-                 slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
+                 slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1):
         # Every game reaches the board through here, so this is the one place the
         # geometry is checked.  Unguarded, rooms_per_side=0 builds a 0x0 board in
@@ -197,7 +213,33 @@ class GridWorld:
         self.reward_func = self.goal_reward_func
         self.map = np.zeros((self.board_side, self.board_side))
         self.state_space = None
-        self.discount = discount
+        # This grid's discount factor γ — the one in
+        # V(s) = max_a [R(s,a) + γ·Σ P(s'|s,a)·V(s')], discounting *steps taken
+        # on the board*.
+        #
+        # Not to be confused with the Query MDP's discount, which is a different
+        # number over a different thing — it discounts *questions asked*, and is
+        # named `q_gamma` in bottlenecks.py precisely so the two cannot be
+        # mistaken for each other.  Both happen to default to 0.99.
+        #
+        # Stored here, and currently read by nothing.  That is not because it is
+        # decorative: it used to be *the* γ of the value iteration, back when
+        # that took the MDP object and could reach in for it.  The value
+        # iteration now takes bare matrices — bottlenecks.value_iteration(
+        # T_R_sto, goal_state, ..., gamma=0.99) — so it has no MDP to ask and
+        # falls back on its own argument, and build_stochastic_matrix does not
+        # carry this value across either.
+        #
+        # Consequence to know before trusting it: passing gamma=0.9 today
+        # changes *nothing*, silently.  The four selection rules the benchmark
+        # reports compute no value function at all, so no γ of either kind moves
+        # a published number.
+        #
+        # Kept rather than deleted because this is the right home for it, and
+        # re-attaching is one keyword argument: a future value-based rule would
+        # read it in experiment.py, which already holds mdp_R and already pulls
+        # `positions` out of it for H3, and pass gamma=mdp_R.gamma.
+        self.gamma = gamma
         # One generator per grid, seeded once and never reset.  A subclass may
         # have built it already (TaxiWorld draws its passenger before calling up);
         # adopting that one keeps a single stream per grid, not two.
@@ -209,13 +251,13 @@ class GridWorld:
         valid_config_found = False
         curr_tries = 0
         while not valid_config_found and curr_tries < max_tries:
-            # Every RETRY_REPORT_EVERY tries, not every try past the first
-            # thousand: the old test was `curr_tries // 1000 > 0`, which printed a
-            # fresh line on all 99 000 remaining attempts.  status_line() also
-            # overwrites itself rather than scrolling — see the module header.
+            # Report on every RETRY_REPORT_EVERY-th try — the modulo, not
+            # "past the first thousand", which would report on every remaining
+            # attempt.  status_line() overwrites itself rather than scrolling, so
+            # 100 000 tries still cost one line — see the module header.
             if curr_tries and curr_tries % RETRY_REPORT_EVERY == 0:
                 status_line(f"{type(self).__name__}: layout try {curr_tries:,}/"
-                            f"{max_tries:,} before falling back to an empty map")
+                            f"{max_tries:,} before giving up on these densities")
             self._blank_board()
             # Start and goal first: protected_cells() can only keep obstacles off
             # them if they already exist.
@@ -237,13 +279,17 @@ class GridWorld:
         status_line(None)
 
         if not valid_config_found:
-            self._blank_board()
-            self.place_start_and_goal()
-            # Keep the rooms: dropping them would hand back an open grid under a
-            # multi-room configuration.  With no obstacles every door is
-            # reachable, so this fallback always reaches the goal.
-            if self.rooms_per_side > 1:
-                self.build_one_way_rooms()
+            # No silent fallback.  See UnsolvableLayout: substituting an
+            # obstacle-free board here would answer the caller with a different
+            # game than the one it asked for, and every mean computed from it
+            # would be wrong without saying so.
+            raise UnsolvableLayout(
+                f"{type(self).__name__}: no solvable {self.board_side}x"
+                f"{self.board_side} layout in {max_tries:,} tries at "
+                f"obstacle_density={self.obstacle_density} "
+                f"({self.rooms_per_side}x{self.rooms_per_side} rooms of "
+                f"{self.room_side}x{self.room_side}). Lower the density, or "
+                f"widen the board.")
 
         self.create_state_space()
         assert slip_prob >= 0 and slip_prob * 3 <= 1, \
@@ -253,9 +299,10 @@ class GridWorld:
     def _blank_board(self):
         """Empty map, no walls, no doors — the state every attempt starts from.
 
-        The retry loop and the give-up fallback both begin here, so they cannot
-        drift.  With a single room both collections stay empty, which is what
-        reduces every movement test to "is this cell an obstacle?".
+        Every attempt of the layout search starts from here, so no attempt can
+        inherit the walls or obstacles of the one before it.  With a single room
+        both collections stay empty, which is what reduces every movement test to
+        "is this cell an obstacle?".
         """
         self.map = np.zeros((self.board_side, self.board_side))
         self.doors = {}
@@ -346,16 +393,18 @@ class GridWorld:
         self.state_space = None
         total_obstacles = int(self.board_side * self.board_side * self.obstacle_density)
         protected = self.protected_cells()
-        # The loop below draws cells at random and rejects the protected and the
-        # already-taken ones, so asking for more obstacles than there are cells
-        # to put them on does not fail — it spins for ever, inside a swallowed
-        # stdout and behind a frozen progress bar.  Rare, but undiagnosable when
-        # it happens, and it got likelier the moment RockWorld started protecting
-        # every rock: the safe obstacle_density ceiling on a 9x9 drops from 0.975
-        # to about 0.68 at the default rock_density.
+        # Guard against an impossible request.  The loop below draws cells at
+        # random and rejects the protected and the already-taken ones, so asking
+        # for more obstacles than there are cells to hold them does not fail —
+        # it spins for ever, inside a swallowed stdout and behind a frozen
+        # progress bar, which is the least diagnosable failure this code has.
+        #
+        # The ceiling is well below 1.0 because protected_cells() grows: on a 9x9
+        # RockWorld at the default rock density, protecting every rock brings the
+        # highest workable obstacle_density down from 0.975 to about 0.68.
         #
         # Raised rather than clamped: silently placing fewer obstacles would make
-        # the obstacle_density reported in the CSV a lie, and the densities are
+        # the obstacle_density reported in the CSV a lie, and the request is
         # arithmetically impossible for every seed, so retrying cannot help.
         placeable = self.board_side * self.board_side - len(protected)
         if total_obstacles > placeable:
@@ -509,9 +558,14 @@ class GridWorld:
     def get_reward_function(self):
         """The callable R(state, action, next_state) scoring transitions.
 
-        value_iteration() evaluates it over the pruned state space to build the
-        per-(state, action) reward that drives V_R.  Subclasses override
-        reward_func, so this stays generic across the grid games."""
+        Subclasses swap in their own reward_func — puddles, rocks, the taxi fare
+        — so this accessor stays generic across the grid games.
+
+        Nothing in the benchmark pipeline reads it: bottlenecks are a property of
+        *reachability*, not of reward, so the whole comparison runs on the
+        transition structure alone.  It is here for a caller that wants to solve
+        one of these grids as an ordinary MDP.
+        """
         return self.reward_func
 
     def get_init_state(self):
@@ -715,19 +769,27 @@ def augment_mdp_to_deterministic(mdp):
     original_actions = mdp.get_actions()
     n_states = len(states)
 
-    # The scan below is the whole cost of this function, and on its own it is
-    # O(|S|^2 |A|): for every (state, action) it used to ask the MDP about every
-    # state in the game.  Almost all of those calls exist only to be told 0 —
-    # _transition_probability_for_move rejects any non-adjacent cell on its first
-    # line — so on a 25x25 rockworld it made 100M calls to find at most 40
-    # non-zero answers per row.
+    # The scan below is the whole cost of this function, so it is worth narrowing.
+    #
+    # Done naively it is O(|S|^2 |A|): for every (state, action), ask the MDP
+    # about every state in the game.  Nearly all of those questions can only be
+    # answered 0 — _transition_probability_for_move rejects any non-adjacent cell
+    # on its first line — so a 25x25 rockworld would make ~100M calls to find at
+    # most 40 non-zero answers per row.
     #
     # An MDP that can name the cells one step can reach (successor_cells) lets us
-    # test only the states sitting on those cells.  It is a search-space
-    # reduction and nothing more: every candidate still goes through
-    # get_transition_probability, so the matrix produced is identical, and an MDP
-    # without the method — minigridworld, whose state carries a facing direction
-    # — silently keeps the exhaustive scan.
+    # ask only about the states sitting on those cells, which is roughly a 100x
+    # saving on the larger boards.  It is a search-space reduction and nothing
+    # more: every surviving candidate still goes through
+    # get_transition_probability, so the matrix produced is identical to the
+    # exhaustive one.
+    #
+    # `getattr` rather than a plain call, so an MDP *without* the method still
+    # works — it silently gets the exhaustive scan.  Every game in the repo
+    # defines it (all four inherit GridWorld.successor_cells), so that branch is
+    # currently unexercised; it is the contract that lets a future MDP whose
+    # state is not simply a cell be determinized here without being rewritten
+    # first.
     successor_cells = getattr(mdp, "successor_cells", None)
     states_by_cell = {}
     if successor_cells is not None:
@@ -739,9 +801,10 @@ def augment_mdp_to_deterministic(mdp):
         if successor_cells is None:
             candidates = range(n_states)
         else:
-            # Sorted, so the outcomes keep the ascending-index order the
-            # exhaustive scan produced; the augmented action indices, and so the
-            # matrix itself, stay byte-identical to what older seeds produced.
+            # Sorted, so outcomes are visited in ascending state-index order,
+            # exactly as the exhaustive scan would visit them.  That is what
+            # makes the augmented action indices — and so the whole matrix —
+            # identical whichever of the two paths was taken.
             candidates = sorted(
                 idx for cell in successor_cells(state)
                 for idx in states_by_cell.get(cell, ()))
@@ -770,11 +833,11 @@ def augment_mdp_to_deterministic(mdp):
 def build_stochastic_matrix(mdp):
     """The robot's stochastic model, pruned to the states reachable from the start.
 
-    DEAD CODE — nothing in the pipeline calls this any more.  It existed to feed
-    bottlenecks.value_iteration, which fed H3; H3 now ranks bottlenecks by
-    Euclidean distance to the goal and needs neither.  Kept rather than deleted
-    because it still works and would be the starting point for any value-based
-    condition; nothing exercises it, so treat it as untested from here on.
+    UNUSED — no caller anywhere in the pipeline, and no test.  Its only consumer
+    is bottlenecks.value_iteration, which is unused on the same terms: none of
+    the four selection rules the benchmark reports needs a value function.  Kept
+    as the starting point for a value-based rule, should one be wanted, and to be
+    treated as untested code until then.
 
     This is the matrix the determinization throws away.  augment_mdp_to_deterministic
     turns every (action, outcome) pair into its own action, which lets the agent
@@ -784,7 +847,7 @@ def build_stochastic_matrix(mdp):
     Returns
     -------
     A 5-tuple.  The first two are the model; the last three are what
-    bottlenecks.value_iteration needs to run in *reward* mode rather than
+    bottlenecks.value_iteration would need to run in *reward* mode rather than
     probability mode, and are the only reason this returns more than a matrix.
 
     T_R_sto     : (n_reachable, n_actions, n_reachable) float64, P(s'|s,a) over
@@ -804,7 +867,8 @@ def build_stochastic_matrix(mdp):
     O(|S|^2 |A|) probability scan only ever runs over the reachable states.
 
     Note for callers: Overcooked's build_stochastic_matrix returns only the
-    first two.  `T, index, *rest = build_stochastic_matrix(...)` followed by
+    first two, so unpack with a star to handle either —
+    `T, index, *rest = build_stochastic_matrix(...)`, then
     `value_iteration(T, index[goal], *rest)` is correct for both.
     """
     states  = mdp.get_state_space()
@@ -815,8 +879,9 @@ def build_stochastic_matrix(mdp):
     start_idx = hashes.index(mdp.get_state_hash(mdp.get_init_state()))
 
     # Successors first (probabilities not needed yet), then BFS from the start.
-    # This O(|S|^2 |A|) scan is the dominant cost of the whole H3 stage — far
-    # more than the value iteration it feeds.
+    # This scan is exhaustive and O(|S|^2 |A|) — it has no equivalent of
+    # augment_mdp_to_deterministic's successor_cells narrowing — and it dominates
+    # the cost of anything built on top of it.
     successors = [set() for _ in range(n_s)]
     for si, s in enumerate(states):
         for a in actions:

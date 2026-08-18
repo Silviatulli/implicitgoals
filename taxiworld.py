@@ -51,7 +51,7 @@ class TaxiWorld(GridWorld):
     "standing on the destination"."""
 
     def __init__(self, start=None, passenger_loc=None, destination=None,
-                 obstacle_density=0.1, slip_prob=0.0, discount=0.99,
+                 obstacle_density=0.1, slip_prob=0.0, gamma=0.99,
                  max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1, wrong_dropoff_penalty=-10,
                  rooms_per_side=1, room_side=5):
@@ -65,7 +65,7 @@ class TaxiWorld(GridWorld):
         self.wrong_dropoff_penalty = wrong_dropoff_penalty
         super().__init__(start=start, goal=destination,
                          obstacle_density=obstacle_density, slip_prob=slip_prob,
-                         discount=discount, max_tries=max_tries, obstacle_seed=obstacle_seed,
+                         gamma=gamma, max_tries=max_tries, obstacle_seed=obstacle_seed,
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
         self.destination = self.goal_pos  # reuse goal_pos as destination
@@ -235,8 +235,8 @@ class TaxiWorld(GridWorld):
         return "."
 
 
-def generate_and_visualize_taxiworld(start, goal, obstacle_density,
-                                     model_type="Model", obstacle_seed=None,
+def build_taxiworld(start, goal, obstacle_density,
+                                     obstacle_seed=None,
                                      passenger_loc=None, destination=None,
                                      rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate a single-passenger ``TaxiWorld``.
@@ -271,19 +271,22 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
     map before determinizing.
     """
     n = board_side(rooms_per_side, room_side)
-    mdp = generate_and_visualize_taxiworld(
+    mdp = build_taxiworld(
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density, passenger_loc=passenger_loc,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
-        model_type=model_type, obstacle_seed=random.randint(1, 10000))
+        obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
     t0 = time.time()
     next_states, start_idx, goal_idx = augment_mdp_to_deterministic(mdp)
-    # The MDP itself is returned too: it carries the stochastic transition
-    # probabilities that determinization discards, which Hypothesis 3 needs.
+    # The MDP object is handed back alongside the matrix, because the matrix
+    # alone has forgotten the board: it is integer state IDs and nothing else.
+    # Hypothesis 3 needs to know where each state *sits* — it ranks bottlenecks
+    # by straight-line distance to the goal — and reads that off the MDP's state
+    # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 
@@ -318,10 +321,13 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
         random.seed(seed)
         np.random.seed(seed)
 
-    # One passenger for the whole instance, as with start and goal: only the
-    # obstacle map varies between models.  Drawing it per model made each human's
-    # pickup its own bottleneck, so |B| grew with the human count and blew past
-    # --max-bottlenecks, skipping every taxi repetition.
+    # One passenger for the whole instance, as with the start and the goal: only
+    # the obstacle map varies between models.  This is load-bearing, not tidiness.
+    # The pickup cell is a mandatory waypoint — no delivery happens without it —
+    # so a passenger drawn per model would give every human a *different*
+    # mandatory waypoint, and |B|, which is the union over the humans, would grow
+    # with --humans until it blew past --max-bottlenecks and no taxi instance
+    # could be drawn at all.
     passenger_loc = (random.randint(0, size - 1), random.randint(0, size - 1))
 
     robot = _make_determinized(obstacle_density, "Robot Model", visualize,

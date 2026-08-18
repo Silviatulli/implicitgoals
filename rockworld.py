@@ -45,9 +45,13 @@ from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
 # RockWorld
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Collected rocks live in the state, so each valuable rock doubles the state
-# space.  The cap keeps that exponential in check: the default 9x9 board carries
-# 9 valuable rocks uncapped, which is 512x the states.  3 rocks is 8x.
+# Collected rocks live in the state, so each valuable rock *doubles* the state
+# space.  The cap is what keeps that exponential survivable: on the benchmark's
+# default 25x25 board at rock_density 0.3 the ratio would ask for 74 valuable
+# rocks — 2^74 times the positions — where the cap holds it to 2^3 = 8x, giving
+# the ~5k states rockworld actually runs with.  Any rock past the cap is placed
+# as a dangerous one instead, so the board still carries the requested number of
+# rocks; only how many of them can be collected is limited.
 MAX_VALUABLE_ROCKS = 3
 
 # Share of the rocks that are valuable; the rest are dangerous.  A module
@@ -72,7 +76,7 @@ class RockWorld(GridWorld):
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
                  rock_density=0.3, valuable_rock_ratio=VALUABLE_ROCK_RATIO,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
-                 slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
+                 slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
                  max_valuable_rocks=MAX_VALUABLE_ROCKS,
                  rooms_per_side=1, room_side=5,
@@ -95,7 +99,7 @@ class RockWorld(GridWorld):
 
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
-                         slip_prob=slip_prob, discount=discount,
+                         slip_prob=slip_prob, gamma=gamma,
                          max_tries=max_tries, obstacle_seed=obstacle_seed,
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
@@ -105,8 +109,11 @@ class RockWorld(GridWorld):
             # one, and every model of the instance paints the same cells.
             self.paint_rocks()
         else:
-            # Standalone use with no shared layout: draw this grid's own rocks
-            # on whatever the obstacles left free, as before.
+            # Standalone use with no shared layout — a bare `python
+            # rockworld.py`, or any caller passing no positions.  This grid then
+            # draws its own rocks on whatever the obstacles left free, which is
+            # fine in isolation but would break the shared-bit-order invariant
+            # above if two models of one instance ever did it independently.
             self.place_rocks()
         self.reward_func = self.rock_reward_func
         # GridWorld.__init__ built the state space before the rocks existed, so
@@ -270,8 +277,8 @@ def sample_rock_layout(board, rock_density, rng,
     return picked[:n_valuable], picked[n_valuable:]
 
 
-def generate_and_visualize_rockworld(start, goal, obstacle_density, rock_density,
-                                     model_type="Model", obstacle_seed=None,
+def build_rockworld(start, goal, obstacle_density, rock_density,
+                                     obstacle_seed=None,
                                      rooms_per_side=1, room_side=5, slip_prob=0.0,
                                      valuable_positions=None,
                                      dangerous_positions=None):
@@ -300,21 +307,24 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
     generated map before determinizing.
     """
     n = board_side(rooms_per_side, room_side)
-    mdp = generate_and_visualize_rockworld(
+    mdp = build_rockworld(
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density, rock_density=rock_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
         valuable_positions=valuable_positions,
         dangerous_positions=dangerous_positions,
-        model_type=model_type, obstacle_seed=random.randint(1, 10000))
+        obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
     t0 = time.time()
     next_states, start_idx, goal_idx = augment_mdp_to_deterministic(mdp)
-    # The MDP itself is returned too: it carries the stochastic transition
-    # probabilities that determinization discards, which Hypothesis 3 needs.
+    # The MDP object is handed back alongside the matrix, because the matrix
+    # alone has forgotten the board: it is integer state IDs and nothing else.
+    # Hypothesis 3 needs to know where each state *sits* — it ranks bottlenecks
+    # by straight-line distance to the goal — and reads that off the MDP's state
+    # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 

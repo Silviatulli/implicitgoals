@@ -26,7 +26,7 @@ Four selection rules are wired in — `solve_query_mdp_exact` (Strategic VI), H1
 Info Gain, H3 Goal Proximity and H4 Query Frequency — reported against the
 random-order control, so five columns. `--h2` runs each rule a second time
 wearing the H2 dominance mask, for nine. H2 is not deleted, but it looks
-irrelevant, so it is off by defaul.
+irrelevant, so it is off by default.
 
 ## Architecture — how a request flows through the code
 
@@ -41,7 +41,6 @@ irrelevant, so it is off by defaul.
 │   |-- rockworld.py       grid + valuable/dangerous rocks                      │
 │   `-- taxiworld.py       grid + pickup/dropoff passenger                      │
 │                                                                               │
-│ minigridworld.py    MiniGrid Unlock / UnlockPickup (own state, no base class) │
 │ overcooked_env.py   kitchen/recipe rules (own state, no base class)           │
 └───────────────────────────────────────────────────────────────────────────────┘
                                         |
@@ -59,7 +58,7 @@ irrelevant, so it is off by defaul.
 │   Oracle                          -> simulated human answers          │
 │   solve_query_mdp_exact           -> ExactQNet   VI baseline          │
 │   solve_query_mdp_info_gain       -> GreedyQNet  H1                   │
-│   solve_query_mdp_proximity       -> GreedyQNet  H3 (needs V_R)       │
+│   solve_query_mdp_proximity       -> GreedyQNet  H3 (needs geometry)  │
 │   solve_query_mdp_frequency       -> GreedyQNet  H4                   │
 │   build_dominance                 -> (n,n) mask  H2 — off by default  │
 │   evaluate_policy_on_real_human   -> query counts; owns termination   │
@@ -81,16 +80,13 @@ irrelevant, so it is off by defaul.
 
 ### Game layer
 
-Four of the six games are grids, and they all share the same core:
+Four of the five games are grids, and they all share the same core:
 `gridworld_core.py` defines the basic `GridWorld` MDP and a function that
 turns any stochastic MDP into its determinized version. `gridworld.py`,
 `puddleworld.py`, `rockworld.py`, and `taxiworld.py` each build on this
 core and just add their own twist — puddles, rocks, or a taxi that picks
 up and drops off a passenger — then call the same determinizer to get
 their transition matrices.
-
-`minigridworld.py` adds two more environments, MiniGrid's Unlock and
-UnlockPickup tasks. It's in the repo and works probably, but I didn't add it to `experiment.py`yet.
 
 `overcooked_env.py` stands on its own, separate from the grid games.
 Overcooked isn't a grid, and its MDP is already deterministic, so there's
@@ -109,7 +105,8 @@ the whole game-agnostic half of the pipeline.
 Termination lives in `evaluate_policy_on_real_human`, never in a policy: a
 condition is only a scoring rule over `B`, and every one of them stops on
 the same `I_hat ⊆ I_k` test `solve_query_mdp_exact` builds its absorbing masks
-from. That is what makes the nine columns comparable.
+from. Sharing a stopping rule that none of them owns is what makes the columns
+comparable.
 
 ### Experiment / results layer
 
@@ -117,3 +114,10 @@ from. That is what makes the nine columns comparable.
 count, and times every step. It writes `results/compute_times.csv` and
 `results/query_counts.csv`, then plots them into `results/compute_times.png`
 and `results/query_counts.png`.
+
+Not every random map is usable, so each repetition redraws until it gets one
+that passes two conditions: `|B| <= --max-bottlenecks` (affordable — Algorithm 1
+is a 2^|B| search) and `|I| >= --min-hypotheses` (interesting — with a single
+hypothesis there is nothing to ask about and every rule ties at zero queries).
+The `n_draws` column reports how many maps were built per repetition, so the
+strength of that conditioning stays visible.

@@ -17,18 +17,24 @@ so every room is a C x C square and the room grid is R x R.  The walls are thin 
 they run *between* cells rather than occupying any — so the board is exactly
 R * C cells per side, nothing is spent on the walls, and a door is an *edge*: you
 stand west of a door, step right, and you are in the next room, never standing in
-the door itself.  The default R=3, C=3 is a 9x9 board of nine 3x3 rooms, and
---rooms-per-side 1 is the degenerate case: one room, no walls, an open C x C board.
-The defaults are R=5, C=5 — a 25x25 board of twenty-five 5x5 rooms, with 40
-one-way doors.
+the door itself.
+
+The defaults are R=5, C=5: a 25x25 board of twenty-five 5x5 rooms, with 40
+one-way doors.  --rooms-per-side 1 is the degenerate case — one room, no walls,
+an open C x C board — and |I| = 1 on it, for the reason given just below.
 
 Every wall between two neighbouring rooms carries exactly one door, and it is
-**one-way** — east or south only — sitting at the middle of that wall.  Doors are
-shared by the robot and every human, like the start, the goal and the taxi's
-passenger; only the obstacles vary between models.  Drawing a door per model
-instead put each human's mandatory waypoints on different cells, so B_nofilter —
-the union over the humans — grew linearly with the human count and ran past
---max-bottlenecks, which Algorithm 1's 2^|B| cost cannot absorb.
+**one-way** — east or south only — sitting at the middle of that wall.
+
+Which parts of an instance are shared, and which vary, is a deliberate design:
+the start, the goal, the doors, the taxi's passenger, RockWorld's rocks and
+PuddleWorld's puddles are identical across the robot and every candidate human,
+and **only the obstacles differ**.  That is what keeps the query set small.  B is
+the *union* of the humans' bottleneck sets, so anything drawn per model puts each
+human's mandatory waypoints on different cells and makes |B| grow linearly with
+--humans — which Algorithm 1's 2^|B| cost cannot absorb.  Sharing them instead
+makes the humans disagree about which *route* is forced, which is the interesting
+disagreement.
 
 The orientation is the point.  On an open grid a single trajectory can tour every
 bottleneck and come back, so Algorithm 1 always finds exactly one maximally
@@ -38,16 +44,26 @@ taken become unreachable, and |I| grows to the number of monotone routes through
 the room grid: C(2(R-1), R-1), so 6 for 3x3, 20 for 4x4 and 70 for the default
 5x5.
 
---humans is bounded by the same 2^|B| cost, since B_nofilter is the union over
-the humans.  An instance that busts --max-bottlenecks is no longer skipped: it is
-thrown away and *redrawn* from a fresh seed until one fits, so every
-configuration reports the full --num-simu repetitions instead of however many
-happened to survive.  The price is that the maps are now sampled conditioned on
-|B| <= --max-bottlenecks, which favours the ones with fewer mandatory waypoints;
-`n_draws` is the mean number of maps drawn per repetition and is what makes that
-conditioning visible (1.0 means the cap never bound).  Raising --humans therefore
-costs draws rather than repetitions.  Overcooked is unaffected — its bottlenecks
-come from recipes, not maps.
+--humans is bounded by the same 2^|B| cost, since B is the union over the humans.
+
+Not every random map is usable, and a repetition *redraws* until it gets one that
+is — a fresh seed, a fresh map, the previous one discarded.  Two conditions have
+to hold (see draw_instance_under_cap):
+
+    |B| <= --max-bottlenecks   affordable: Algorithm 1 is a 2^|B| search and the
+                               exact solver allocates 3^|B| knowledge states.
+    |I| >= --min-hypotheses    interesting: with a single hypothesis there is
+                               nothing to ask about, every rule stops at once and
+                               all five conditions tie at zero queries.
+
+So every configuration reports the full --num-simu repetitions.  The price is
+that the maps are sampled *conditioned* on both, which is not a neutral sample:
+it keeps the maps with fewer mandatory waypoints and more surviving routes.
+`n_draws` is the mean number of maps drawn per repetition and is what makes the
+strength of that conditioning readable — 1.0 means neither condition ever bound,
+and 48.0 means 47 maps were built and thrown away for every one reported.
+Raising --humans therefore costs draws rather than repetitions.  Overcooked is
+barely affected — its bottlenecks come from recipes, not maps.
 
 Five conditions per repetition: the four selection rules (VI, H1 Info Gain,
 H3 Goal Proximity, H4 Query Frequency), plus the random-order "query all"
@@ -101,7 +117,7 @@ from overcooked_env import (
     CLIENT_SERVED,
 )
 from gridworld_core import (board_side, status_line, set_status_sink,
-                            RETRY_REPORT_EVERY)
+                            RETRY_REPORT_EVERY, UnsolvableLayout)
 # Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
 # directly instead of a stochastic MDP to determinize: there is no
 # augment_mdp_to_deterministic step, the matrices are already
@@ -137,9 +153,9 @@ from bottlenecks import (
 # mask is never built, and the CSV fields, plots and summary all follow the
 # condition list the run actually used.
 #
-# H2 is unsound and no longer in the paper.  The "+ H2" columns are lower than
-# their twins because the mask answers questions the oracle was never asked, not
-# because it asks better ones — do not read the gap as a saving.
+# H2 is unsound and is not in the paper.  The "+ H2" columns are lower than their
+# twins because the mask answers questions the oracle was never asked, not because
+# it asks better ones — do not read the gap as a saving.
 BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
 
 
@@ -249,8 +265,8 @@ def build_overcooked_instance(num_humans=None, allow_drop=False, seed=None):
 
     The base transition matrix is rebuilt on every call, deliberately: it costs
     ~26 ms against a ~60 ms pipeline, and memoizing it would make `t_build` mean
-    "one real build divided by num_simu" instead of the cost of building one
-    instance.  Do not add a cache back.
+    "one real build divided by num_simu" rather than the cost of building one
+    instance.  That is why there is no cache here — please do not add one.
     """
     t0 = time.perf_counter()
     with _quiet():
@@ -331,11 +347,26 @@ def compute_bottleneck_sets(T_R, T_H_list, start_state, goal_state,
     return oracle_sets, B_nofilter, B, times
 
 
-# An instance whose query set busts --max-bottlenecks used to be skipped
-# outright, which cost up to 31 of 50 repetitions on taxiworld and left each
-# configuration averaging over a different, unstated number of episodes.  It is
-# redrawn instead, and only a repetition that cannot find a usable map in this
-# many draws is given up on.
+def compute_hypothesis_space(T_R, B, start_state, goal_state):
+    """Algorithm 1 over the query set, timed.  Returns (I, t_algorithm1).
+
+    Split out for the same reason compute_bottleneck_sets was: the draw loop has
+    to know |I| before it accepts an instance, and running it there means it must
+    not run again in run_instance.
+    """
+    t0 = time.perf_counter()
+    with _quiet():
+        I = find_maximally_achievable_subsets(B, T_R, start_state,
+                                              goal_state, verbose=False)
+    return I, time.perf_counter() - t0
+
+
+# How many maps a single repetition may draw before it gives up and reports
+# nothing.  Rejecting an instance is cheap and common (see draw_instance_under_cap
+# for the two conditions it has to pass), so the budget is generous: giving up is
+# meant to mean "this configuration is impossible", never "this one was unlucky".
+# A repetition that exhausts it is the only way a configuration ends up averaging
+# over fewer than --num-simu episodes.
 MAX_INSTANCE_TRIES = 100_000
 
 # Draw n reuses the repetition seed offset by n * this stride.  A redraw has to
@@ -349,22 +380,43 @@ RETRY_SEED_STRIDE = 1_000_003
 
 
 def draw_instance_under_cap(game, room_side, num_humans, seed, args,
-                            max_bottlenecks, max_tries=MAX_INSTANCE_TRIES):
-    """Draw instances until one's query set fits under `max_bottlenecks`.
+                            max_bottlenecks, min_hypotheses=1,
+                            max_tries=MAX_INSTANCE_TRIES):
+    """Draw instances until one is both affordable and interesting.
 
-    Returns (instance, bundle, t_build, t_rejected, n_draws).  `instance` is None
-    when all `max_tries` draws came back too big, which skips the repetition —
-    the one case left where a repetition produces no episode.
+    Two constraints, tested in this order because the second is far more
+    expensive than the first:
 
-    `t_build` times the accepted draw alone, so it still means "what one instance
-    costs to build" and stays comparable with runs made before redrawing existed.
-    Everything burned on the rejected draws — their builds *and* their bottleneck
-    passes — is reported separately, as `t_rejected`.
+      1. ``len(B) <= max_bottlenecks`` — affordability.  Algorithm 1 is a 2^|B|
+         DFS and the exact solver allocates 3^|B| knowledge states, so an
+         oversized query set has to be rejected *before* either runs.
+      2. ``len(I) >= min_hypotheses`` — interest.  A repetition with one
+         hypothesis poses no question at all: I_hat is already inside the only
+         I_k, every rule terminates at once, and all five conditions tie at zero
+         queries.  Those instances say nothing about which rule is better, so
+         they are drawn past rather than reported.
 
-    Sampling note: conditioning on |B| <= max_bottlenecks is not free.  The maps
-    that survive are the ones with fewer mandatory waypoints, so every mean the
-    run reports describes that conditioned population rather than the raw one.
-    `n_draws` is what makes the strength of the conditioning readable.
+    Returns (instance, bundle, t_build, t_rejected, n_draws, t_accepted_start).
+    `instance` is None
+    when all `max_tries` draws failed one of the two, which skips the repetition
+    — the one case left where a repetition produces no episode.  The bundle
+    carries I, so Algorithm 1 is not run a second time downstream.
+
+    `t_build` times the accepted draw alone, so it means "what one instance costs
+    to build" and nothing else.  Everything burned on the rejected draws — their
+    builds, their bottleneck passes *and* their Algorithm 1 runs — is reported
+    separately, as `t_rejected`.
+    `t_accepted_start` is the perf_counter reading taken at the top of the
+    accepted attempt, the instant its seed was fixed and before anything was
+    built from it; the caller measures t_total from there so the reported cost is
+    one instance's pipeline and excludes the search for a usable map.
+
+    Sampling note: neither constraint is free.  Conditioning on |B| keeps the
+    maps with fewer mandatory waypoints; conditioning on |I| keeps the ones whose
+    routes survive the obstacles, which is a much stronger filter — the raw |I|
+    distribution is dominated by 1.  Every mean the run reports therefore
+    describes that doubly-conditioned population, and `n_draws` is what makes the
+    strength of it readable.
     """
     filter_toboggans = (game == "overcooked")
     t_rejected = 0.0
@@ -387,16 +439,24 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
                 slip_prob=args.slip_prob)
         # instance is a 5-tuple for the grid games and a 4-tuple for Overcooked,
         # but the first four slots are the same four things in both.
-        bundle = compute_bottleneck_sets(instance[0], instance[1], instance[2],
-                                         instance[3], filter_toboggans)
-        if len(bundle[2]) <= max_bottlenecks:
-            status_line(None)
-            return instance, bundle, t_build, t_rejected, attempt + 1
-        # Too big: this instance and its matrices go out of scope here and the
-        # next iteration builds a fresh one over them.  Only the cost survives.
+        T_R, T_H_list, start_state, goal_state = instance[:4]
+        oracle_sets, B_nofilter, B, times = compute_bottleneck_sets(
+            T_R, T_H_list, start_state, goal_state, filter_toboggans)
+        if len(B) <= max_bottlenecks:
+            # Only now is Algorithm 1 affordable to run, and it has to run here
+            # rather than downstream because |I| is the second constraint.
+            I, times["t_algorithm1"] = compute_hypothesis_space(
+                T_R, B, start_state, goal_state)
+            if len(I) >= min_hypotheses:
+                status_line(None)
+                return (instance, (oracle_sets, B_nofilter, B, I, times),
+                        t_build, t_rejected, attempt + 1, t0)
+        # Rejected on one constraint or the other: this instance and its matrices
+        # go out of scope here and the next iteration builds a fresh one over
+        # them.  Only the cost survives.
         t_rejected += time.perf_counter() - t0
     status_line(None)
-    return None, None, float("nan"), t_rejected, max_tries
+    return None, None, float("nan"), t_rejected, max_tries, float("nan")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,10 +466,6 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                  max_exact_n=17, filter_toboggans=False, max_bottlenecks=17,
                  use_h2=False, bottleneck_bundle=None):
-    # mdp_R is what Hypothesis 3 reads coordinates out of:
-    #   * a robot MDP object (grid games) → state[0] is the cell, so H3 ranks
-    #     bottlenecks by Euclidean distance to the goal;
-    #   * None (Overcooked, which has no MDP object and no geometry) → no H3.
     """Run the whole pipeline once on one instance and time every stage.
 
     The Query MDP has two distinct inputs, and they are not the same set:
@@ -431,11 +487,11 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     solve possible at all.
 
     bottleneck_bundle : tuple or None
-        The (oracle_sets, B_nofilter, B, stage_times) compute_bottleneck_sets
-        returns.  main() passes it in because it already had to compute |B| to
-        decide whether to keep this instance at all; None recomputes it, which is
-        the standalone path for running one instance with no redraw loop around
-        it.
+        (oracle_sets, B_nofilter, B, I, stage_times), as draw_instance_under_cap
+        returns it.  main() passes it in because it already had to compute both
+        |B| and |I| to decide whether to keep this instance at all, and neither
+        stage should run twice.  None recomputes both, which is the standalone
+        path for running one instance with no redraw loop around it.
 
     max_bottlenecks : int
         Abandon the repetition when the query set is larger than this.
@@ -463,7 +519,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         Add the "+ H2" twin of every selection rule.  Off by default: the
         dominance mask is not even built, and neither `t_dominance` nor any
         `*_h2` column appears in the returned row or counts.  H2 is unsound and
-        no longer in the paper — see bottlenecks.build_dominance.
+        is not in the paper — see bottlenecks.build_dominance.
 
     Returns (row, counts, success): `row` holds the problem sizes and per-stage
     times, `counts` maps each of the run's conditions to the queries that condition needed
@@ -488,9 +544,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
 
     # n_reachable: how much of the state space the robot can actually get to,
     # against n_states, which is how big the game is on paper (161 against 38 417
-    # for Overcooked).  A BFS over the determinized matrix, so it costs nothing
-    # and every early return below already carries the column.  It used to fall
-    # out of the stochastic matrix H3 built; H3 no longer builds one.
+    # for Overcooked).  A BFS over the determinized matrix, so it costs nothing —
+    # which is why it is computed up front and every early return below can carry
+    # the column.
     row: dict = {"n_states": int(T_R.shape[0]), "n_actions": int(T_R.shape[1]),
                  "n_humans": len(T_H_list),
                  "n_reachable": int(get_reachable_states(
@@ -500,9 +556,13 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     # instance, so it runs these three stages itself and hands the result down
     # rather than paying for them twice.  Recomputing is the standalone path.
     if bottleneck_bundle is None:
-        bottleneck_bundle = compute_bottleneck_sets(T_R, T_H_list, start_state,
-                                                    goal_state, filter_toboggans)
-    oracle_sets, B_nofilter, B, stage_times = bottleneck_bundle
+        # Standalone path: no redraw loop above, so Algorithm 1 has not run yet
+        # and I is filled in after the cap check below.
+        oracle_sets, B_nofilter, B, stage_times = compute_bottleneck_sets(
+            T_R, T_H_list, start_state, goal_state, filter_toboggans)
+        I = None
+    else:
+        oracle_sets, B_nofilter, B, I, stage_times = bottleneck_bundle
     row.update(stage_times)
 
     # Safety valve: bail out before Algorithm 1 rather than after, since it is
@@ -519,11 +579,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         row["skipped"] = f"{len(B)} bottlenecks > {max_bottlenecks}"
         return row, {c: float("nan") for c in conditions}, float("nan")
 
-    t0 = time.perf_counter()
-    with _quiet():
-        I = find_maximally_achievable_subsets(B, T_R, start_state,
-                                              goal_state, verbose=False)
-    row["t_algorithm1"] = time.perf_counter() - t0
+    if I is None:
+        I, row["t_algorithm1"] = compute_hypothesis_space(
+            T_R, B, start_state, goal_state)
 
     # The query set: everything the robot may ask about.  It is B, *not* the
     # labels occurring in I — see the docstring.  The same ordering goes to
@@ -578,11 +636,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
             policies[name] = solver(I, B, oracle=oracle)
         base_solve[name] = time.perf_counter() - t0
 
-    # Proximity is a coordinate lookup and a norm — H3 ranks bottlenecks by
-    # Euclidean distance to the goal, so there is no model to build and no value
-    # iteration to time.  What used to sit in this timer was an O(|S|^2 |A|)
-    # stochastic-matrix build plus a value iteration, and it was the dominant
-    # cost of the whole H3 stage.
+    # H3 ranks bottlenecks by straight-line distance to the goal, so building it
+    # is a coordinate lookup and a norm — no model, no value function.  This timer
+    # is therefore microseconds, unlike the VI baseline's.
     t0 = time.perf_counter()
     with _quiet():
         if mdp_R is not None:
@@ -680,6 +736,10 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None
 # to be built to get one under --max-bottlenecks, and what the discarded ones
 # cost.  t_build stays the accepted draw alone, so it means the same thing it
 # always did and t_build + t_rejected is the true cost of arriving at an instance.
+# t_total is the accepted instance alone — its clock starts at that draw's seed —
+# so t_total + t_rejected, not t_total, is what a repetition took on the wall.
+# The split is deliberate: how many maps had to be thrown away is a property of
+# the generator and the two caps, not of the pipeline being measured.
 STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans", "n_draws",
                "n_B_nofilter", "n_B", "n_I", "n_columns"]
 
@@ -760,8 +820,8 @@ def parse_args(argv=None):
     p.add_argument("--puddle-density", type=float, default=0.2,
                    help="puddle density, puddleworld only (default: 0.2, "
                         "matches PuddleWorld's own default)")
-    p.add_argument("--rock-density", type=float, default=0.3,
-                   help="rock density, rockworld only (default: 0.3)")
+    p.add_argument("--rock-density", type=float, default=0.1,
+                   help="rock density, rockworld only (default: 0.1)")
     p.add_argument("--slip-prob", type=float, default=0.0,
                    help="probability of slipping into each unintended neighbour "
                         "on a move, for the four grid games; 0 makes every move "
@@ -781,12 +841,13 @@ def parse_args(argv=None):
     # Maintainer's note, deliberately not in the help text below: it is about the
     # two default *values*, so its reader is whoever edits them.
     #
-    # The caps guard different stages: Algorithm 1 is a 2^n DFS (2^17 = 131k
-    # subsets, cheap), the exact Query MDP allocates 3^n knowledge states.  They
-    # are now the same number, so an instance accepted at all can also be solved
-    # exactly; while they differed (18 against 17) a repetition could clear
-    # Algorithm 1 and then skip the VI baseline, leaving that column averaged
-    # over a different subset of repetitions than the greedy ones.
+    # The two caps guard different stages: --max-bottlenecks guards Algorithm 1,
+    # a 2^n DFS (2^17 = 131k subsets, cheap); --max-exact-n guards the exact Query
+    # MDP, which allocates 3^n knowledge states.  Keep them equal.  An instance
+    # that clears the first can then always be solved exactly, so every column is
+    # averaged over the same repetitions.  Were the first the larger of the two, a
+    # repetition could pass Algorithm 1 and then have its VI baseline skipped, and
+    # that column alone would average over a subset of the others.
     #
     # Both are sized so Overcooked never redraws at the default MDP: over 160
     # instances (40 seeds x 5/10/20/30 humans) the toboggan filter put |B| in
@@ -802,6 +863,13 @@ def parse_args(argv=None):
                    help="redraw an instance whose query set exceeds this, "
                         "measured after the toboggan filter; Algorithm 1 is a "
                         "2^|B| search (default: 17)")
+    p.add_argument("--min-hypotheses", type=int, default=3,
+                   help="redraw an instance whose hypothesis space is smaller "
+                        "than this.  |I| = 1 poses no question — every rule "
+                        "terminates immediately and all five conditions tie — so "
+                        "such repetitions measure nothing; raising this costs "
+                        "draws, and the raw |I| distribution is dominated by 1 "
+                        "(default: 3)")
     p.add_argument("--max-exact-n", type=int, default=17,
                    help="skip the exact Query MDP above this many bottlenecks, "
                         "since it allocates 3^n arrays; n=17 costs ~29 s and "
@@ -845,12 +913,13 @@ def _rockworld_state_estimate(board, rock_density, valuable_rock_ratio=0.4):
 def _warn_slow_rockworld(jobs, num_simu, rock_density, rooms_per_side=3):
     """Announce the RockWorld jobs that will crawl, and where on the bar.
 
-    Nothing here is at risk of diverging or being skipped: the 2^k collection
-    bits simply multiply the state space that both the determinized build and
-    the determinized build walks, so those jobs run an order of magnitude
-    slower per repetition than the plain grids.  Printing the slice of the
-    progress bar they occupy is the point — an hour of near-frozen bar in that
-    range is expected, not a hang.
+    Nothing here is at risk of diverging or being skipped.  RockWorld carries
+    the set of collected rocks inside the state, so its state space is the board
+    multiplied by 2^k for k valuable rocks, and every stage that walks it — the
+    determinization above all — is an order of magnitude slower per repetition
+    than on a plain grid.  Printing the slice of the progress bar those jobs
+    occupy is the whole point: a long stretch of near-frozen bar in that range is
+    expected, not a hang.
     """
     slow = [i for i, (game, room_side, _) in enumerate(jobs)
             if game == "rockworld"
@@ -929,13 +998,28 @@ def main(argv=None):
             random.seed(seed)
             np.random.seed(seed)
 
-            t_start = time.perf_counter()
-            instance, bundle, t_build, t_rejected, n_draws = draw_instance_under_cap(
-                game, room_side, num_humans, seed, args, args.max_bottlenecks)
+            note = None
+            try:
+                instance, bundle, t_build, t_rejected, n_draws, t_start = \
+                    draw_instance_under_cap(
+                        game, room_side, num_humans, seed, args,
+                        args.max_bottlenecks, min_hypotheses=args.min_hypotheses)
+                if instance is None:
+                    note = (f"no instance with |B| <= {args.max_bottlenecks} and "
+                            f"|I| >= {args.min_hypotheses} in "
+                            f"{MAX_INSTANCE_TRIES:,} draws")
+            except UnsolvableLayout as exc:
+                # The generator could not lay out a solvable board at these
+                # densities.  It raises instead of substituting an obstacle-free
+                # one, so the repetition is reported as NaN rather than quietly
+                # averaging in a board the run never asked for.  Caught here and
+                # not higher up so one impossible configuration cannot take the
+                # whole sweep down with it.
+                instance = bundle = None
+                t_build = t_rejected = n_draws = t_start = float("nan")
+                note = str(exc)
 
-            if instance is None:
-                note = (f"no instance under {args.max_bottlenecks} bottlenecks "
-                        f"in {MAX_INSTANCE_TRIES:,} draws")
+            if note is not None:
                 tqdm.write(f"skipping repetition: {note}")
                 row = {f: float("nan") for f in STAGE_SIZES + stage_times}
                 row["n_humans"] = num_humans
@@ -958,7 +1042,13 @@ def main(argv=None):
             row["t_build"]    = t_build
             row["t_rejected"] = t_rejected
             row["n_draws"]    = n_draws
-            row["t_total"]    = time.perf_counter() - t_start
+            # Clock starts at the accepted draw's seed, so t_total is what one
+            # usable instance costs end to end — its build (determinization
+            # included), Algorithm 1, the solves and the simulations — and never
+            # the redraws that preceded it.  NaN when every draw failed: there is
+            # no accepted instance to time.
+            row["t_total"]    = (float("nan") if instance is None
+                                 else time.perf_counter() - t_start)
 
             reps.append(row)
             counts_per_rep.append(counts)
@@ -1102,7 +1192,9 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
                         (n_reachable), hypothesis-space cardinality (n_I),
                         problem size (|B|), and mean wall-clock time — so
                         the cost of a combination can be read against where it
-                        started and what it was solving for.
+                        started and what it was solving for.  The time shown is
+                        t_total: the accepted instance from its seed onwards,
+                        with the rejected draws (t_rejected) left out.
 
     Returns (query_plot_path, times_plot_path).
     """
@@ -1216,9 +1308,8 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     _rotate_xticks(axes[1, 0], labels_t, x_t)
 
     axes[1, 1].bar(x_t, df_t["t_total"], color="indianred")
-    axes[1, 1].set_yscale("log")
-    axes[1, 1].set_ylabel("mean t_total (s, log scale)")
-    axes[1, 1].set_title("Wall-clock time per repetition")
+    axes[1, 1].set_ylabel("mean t_total (s)")
+    axes[1, 1].set_title("Wall-clock time per instance")
     _rotate_xticks(axes[1, 1], labels_t, x_t)
 
     fig.tight_layout()

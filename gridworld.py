@@ -27,23 +27,22 @@ import numpy as np
 from gridworld_core import GridWorld, augment_mdp_to_deterministic, board_side
 
 
-def generate_and_visualize_gridworld(start, goal, obstacle_density,
-                                     max_attempts=100, model_type="Model", obstacle_seed=None,
+def build_gridworld(start, goal, obstacle_density,
+                                     obstacle_seed=None,
                                      rooms_per_side=1, room_side=5, slip_prob=0.0):
-    """Generate a solvable ``GridWorld`` (retries up to ``max_attempts``).
+    """Build one ``GridWorld``.  Returns a solvable grid, or raises.
 
-    Returns the ``GridWorld`` instance, or ``None`` if no solvable layout was
-    found.
+    Solvability is settled inside ``GridWorld.__init__``, which redraws the
+    layout up to ``DEFAULT_MAX_TRIES`` times and then raises
+    ``UnsolvableLayout`` rather than substituting an easier board.  So there is
+    nothing here for a caller to retry, and never an unsolvable grid handed back
+    — the two outcomes are a good grid and an exception.
     """
-    for _ in range(max_attempts):
-        grid = GridWorld(start=start, goal=goal,
-                         obstacle_density=obstacle_density,
-                         rooms_per_side=rooms_per_side,
-                         room_side=room_side, slip_prob=slip_prob,
-                         obstacle_seed=obstacle_seed)
-        if grid.check_for_path():
-            return grid
-    return None
+    return GridWorld(start=start, goal=goal,
+                     obstacle_density=obstacle_density,
+                     rooms_per_side=rooms_per_side,
+                     room_side=room_side, slip_prob=slip_prob,
+                     obstacle_seed=obstacle_seed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,21 +58,22 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
     generated map before determinizing.
     """
     n = board_side(rooms_per_side, room_side)
-    mdp = generate_and_visualize_gridworld(
+    mdp = build_gridworld(
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
-        model_type=model_type, obstacle_seed=random.randint(1, 10000))
-    if mdp is None:
-        return None
+        obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
     t0 = time.time()
     next_states, start_idx, goal_idx = augment_mdp_to_deterministic(mdp)
-    # The MDP itself is returned too: it carries the stochastic transition
-    # probabilities that determinization discards, which Hypothesis 3 needs.
+    # The MDP object is handed back alongside the matrix, because the matrix
+    # alone has forgotten the board: it is integer state IDs and nothing else.
+    # Hypothesis 3 needs to know where each state *sits* — it ranks bottlenecks
+    # by straight-line distance to the goal — and reads that off the MDP's state
+    # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 
@@ -117,16 +117,10 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
     robot = _make_determinized(obstacle_density, "Robot Model", visualize,
                                rooms_per_side=rooms_per_side,
                                room_side=room_side, slip_prob=slip_prob)
-    if robot is None:
-        raise RuntimeError("Failed to generate a solvable robot GridWorld.")
-
-    humans = []
-    for i in range(num_humans):
-        h = _make_determinized(obstacle_density, f"Human Model {i + 1}",
-                               visualize, rooms_per_side=rooms_per_side,
-                               room_side=room_side, slip_prob=slip_prob)
-        if h is not None:
-            humans.append(h)
+    humans = [_make_determinized(obstacle_density, f"Human Model {i + 1}",
+                                 visualize, rooms_per_side=rooms_per_side,
+                                 room_side=room_side, slip_prob=slip_prob)
+              for i in range(num_humans)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
     total = float(sum(det_times))

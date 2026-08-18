@@ -4,6 +4,32 @@ bottlenecks.py
 Everything the pipeline computes *from* transition matrices: bottleneck
 extraction, Algorithm 1, and the Query MDP solvers.
 
+Reading this against the paper
+------------------------------
+The code renames a few things, mostly to keep ASCII identifiers.  Everything
+below is the paper's object under the name it goes by here:
+
+    paper                       here
+    ------------------------    --------------------------------------------
+    Φ, the hypothesis space     I  (a list of subsets; I_array is its bool
+                                matrix form, and |I| is `n_I` in the CSVs)
+    ϕ ∈ Φ                       I_k, or one row of I_array
+    Algorithm 1                 find_maximally_achievable_subsets
+    CheckAchievability          check_sequential_achievability
+    Definition 6, the Query MDP solve_query_mdp_exact (the "VI baseline" column)
+    H1 Information Gain         solve_query_mdp_info_gain    (rule="entropy")
+    H2 dominance                build_dominance  — UNSOUND, see §7
+    H3                          solve_query_mdp_proximity    (rule="static")
+    H4 Query Frequency          solve_query_mdp_frequency    (rule="marginal")
+
+Two objects have no name in the paper and are easy to confuse, so they are
+spelled out under Notation below: **B_nofilter** against **B**, and **I_G**, the
+evaluated human's own subgoal set, against the hypotheses in I that the robot is
+trying to match it to.
+
+H3 is *not* the version in the current draft — it ranks bottlenecks by Euclidean
+distance to the goal, in three tiers.  See solve_query_mdp_proximity.
+
 Nothing in this module knows what a recipe, an inventory or a kitchen is.  A
 problem instance is fully described by four things:
 
@@ -12,9 +38,10 @@ problem instance is fully described by four things:
     start_state  where every trajectory begins
     goal_state   the absorbing state every successful trajectory ends in
 
-The game module builds those four things — for Overcooked, overcooked_env.py,
-one configuration at a time.  This module is shared across games and knows about
-none of them.
+The game modules build those four things: gridworld.py, puddleworld.py,
+rockworld.py and taxiworld.py each generate a random map and determinize it,
+while overcooked_env.py assembles recipe matrices for a fixed kitchen.  This
+module is shared by all of them and knows about none of them.
 
 Pipeline
 --------
@@ -235,7 +262,10 @@ def remove_toboggan_redundancies(T_matrix, B_list, goal_state):
     cleaned = []
     num_actions = T_matrix.shape[1]
 
-    for b in regular: # (code tres malin jadore)
+    # For each candidate, walk forward until the search hits other bottlenecks.
+    # `immediate_next` collects the first bottlenecks met on every branch out of
+    # b, skipping over the ordinary states in between.
+    for b in regular:
         immediate_next = set()
         queue = deque([b])
         visited = {b}
@@ -335,26 +365,30 @@ def filter_maximal_subsets(masks):
 
 def check_sequential_achievability(mask, from_start, from_bottleneck, n, memo):
     """
-    Paper's CheckAchievability test — does some visiting order for the subset
-    encoded by `mask` exist?
+    Paper's CheckAchievability test — is there *some* order in which the subset
+    encoded by `mask` can be visited, one bottleneck after another?
 
-    Works recursively: a subset {b1…bk} is achievable iff removing any one
-    element bi leaves an achievable subset AND bi is reachable from whatever
-    was visited last in that sub-order.
+    Recursive: a subset {b1…bk} can be visited in some order iff dropping one
+    element bi leaves a subset that can be visited in some order, AND bi is
+    reachable from wherever that shorter order finished.
 
-    Memoized on `mask` so each subset is solved at most once, regardless of
-    how many DFS branches query it (the paper's "caching" step).
-    memo[mask] stores a bitmask of valid "last-visited" bottlenecks,
-    or -1 as a sentinel for the empty set (achievable vacuously).
+    Memo
+    ----
+    `memo` is a dict {int: int}, keyed by subset mask.  Its value is *not* a
+    yes/no answer but the set of possible finishing points: `memo[S]` is a
+    bitmask of the bottlenecks a trajectory covering all of S can end on.  Those
+    are the only starting points the next step has to be checked against, which
+    is what makes the recursion cheap.  Every element of memo[S] is in S by
+    construction, and memo[S] == 0 means S cannot be covered at all.
 
-    Uses Python int arithmetic for bitmasks so n > 63 bottlenecks are safe.
+    Two conventions:
+      * memo[0] = -1 marks the empty subset — coverable, but with no finishing
+        point, so the caller falls back on reachability from the start;
+      * a subset is solved at most once however many DFS branches ask for it
+        (the paper's "caching" step).
 
-    memo is a dict {int: int}.
-    "memo[set1] = set2" means "each elt of set2 is a valid last-visited node
-    for the achievable subset set1"  (by construction, each element of set2
-    is in set1. set 2 tell where a trajectory covering all set1 can end)
-
-    il est malin ce claude !
+    Bitmasks are Python ints rather than numpy words, so n > 63 bottlenecks are
+    safe.
     """
 
     if mask in memo:
@@ -524,6 +558,15 @@ class Oracle:
     All probabilities are precomputed at __init__ time into a flat float32 array
     indexed by raw state ID, so individual queries run in O(1) after construction.
 
+    What experiment.py actually uses
+    --------------------------------
+    Only `probs_for_raw_ids` — the Oracle serves the benchmark as a *prior*, not
+    as an answering oracle.  The answers an episode receives come from
+    evaluate_policy_on_real_human, which compares each query against the drawn
+    human's own bottleneck set deterministically.  `query`, `p_yes` and
+    `bottleneck_matrix` below are correct and work as documented; they are the
+    sampling half of this class, and no code path in main() reaches them.
+
     Special cases
     -------------
     Empty ensemble  → uniform 50/50 for every bottleneck.
@@ -553,17 +596,27 @@ class Oracle:
                     counts[b] += 1
             self._p = counts.astype(np.float32) / n
 
+        # Not broken, but not read by experiment.py's main() — it records the
+        # extent of self._p for a caller that wants it.
         self._n_states = n_states
 
     def query(self, bottleneck: int) -> bool:
-        """Sample YES/NO for a single bottleneck (raw state ID)."""
+        """Sample YES/NO for a single bottleneck (raw state ID).
+
+        Not broken, but not used by experiment.py's main(): episodes get
+        deterministic answers from evaluate_policy_on_real_human instead.
+        """
         return bool(self.rng.random() < self._p[bottleneck])
 
     def p_yes(self, bottleneck: int) -> float:
-        """Return P(YES) for a single bottleneck (raw state ID)."""
+        """Return P(YES) for a single bottleneck (raw state ID).
+
+        Not broken, but not used by experiment.py's main(): the solvers ask
+        for the whole vector at once, through probs_for_raw_ids.
+        """
         return float(self._p[bottleneck])
 
-    # ── batch helpers (used by the MDP solver and training env) ─────────────
+    # ── batch helpers ──────────────────────────────────────────────────────
 
     def probs_for_raw_ids(self, raw_ids) -> np.ndarray:
         """
@@ -576,7 +629,14 @@ class Oracle:
         """
         Return a bool array of shape (n_sets, len(raw_ids)).
         Entry [k, j] is True iff raw_ids[j] belongs to bottleneck set k.
-        Used to feed the per-episode deterministic oracle into QueryMDPVecEnv.
+
+        The membership table behind `query()`, exposed in one piece for a caller
+        that wants to answer deterministically against a chosen set rather than
+        sampling one per question.
+
+        Not broken, but not used by experiment.py's main(): it draws one human's
+        set from `oracle_sets` directly and hands that to
+        evaluate_policy_on_real_human.
         """
         raw_ids = list(raw_ids)
         return np.array([[b in s for b in raw_ids] for s in self._sets], dtype=bool)
@@ -587,10 +647,13 @@ class Oracle:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ExactQNet(nn.Module):
-    """Exact Query MDP policy with the same callable interface as QNet.
+    """The exact Query MDP policy: the VI baseline every other rule is scored
+    against.
 
-    Not a neural network — backed by precomputed backward-induction arrays.
-    Built by solve_query_mdp_exact(); do not instantiate directly.
+    Not a neural network, despite subclassing nn.Module — it is backed by
+    precomputed backward-induction arrays, and only wears the Module interface so
+    that it and GreedyQNet are interchangeable at call sites.  Built by
+    solve_query_mdp_exact(); do not instantiate directly.
     forward(x) takes a (batch, 2n) observation tensor and returns (batch, n) Q-values:
     0.0 for every tied-optimal action, −1e9 for all others.
     """
@@ -632,7 +695,7 @@ def _as_label(b):
     return int(b)
 
 
-def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
+def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                           oracle: "Oracle | None" = None):
     """
     Solve the Query MDP via vectorized backward induction.
@@ -654,7 +717,9 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
     ----------
     I : list of subsets of bottlenecks — raw state IDs (decoded tuples also work,
         but then `oracle` cannot be used since it is indexed by raw ID).
-    C_Q, p_I, gamma : MDP cost/reward/discount parameters
+    C_Q, p_I, q_gamma : the Query MDP's cost, reward and discount.  `q_gamma`
+        discounts per *question asked*, not per step taken in the game — the
+        latter is a grid's own `mdp.gamma`, and value_iteration's `gamma`.
     p_F : float (default 0.0)
         Terminal value of failure states.
     oracle : Oracle or None
@@ -747,7 +812,7 @@ def solve_query_mdp_exact(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
             positions = np.nonzero(candidate)[0]
             idx       = level[positions]
             p_b       = probs[i]
-            expected  = C_Q + gamma * (p_b * V[idx + POW3[i]] + (1.0 - p_b) * V[idx + 2 * POW3[i]])
+            expected  = C_Q + q_gamma * (p_b * V[idx + POW3[i]] + (1.0 - p_b) * V[idx + 2 * POW3[i]])
             better = expected > best_val[positions]
             equal  = expected == best_val[positions]
             best_val [positions[better]] = expected[better]
@@ -849,13 +914,13 @@ def value_iteration(T_R_sto, goal_state, reward_function=None,
                     gamma=0.99, tol=1e-10, max_iter=10_000):
     """V_R: the robot's optimal state value under M_R.
 
-    DEAD CODE — nothing in the pipeline calls this any more.  It fed H3, which
-    now ranks bottlenecks by Euclidean distance to the goal and needs no value at
-    all (see solve_query_mdp_proximity).  It is kept rather than deleted because
-    it still works and is the obvious starting point if a value-based condition
-    is ever wanted again; its partner builders, gridworld_core and
-    overcooked_env's build_stochastic_matrix, are kept for the same reason.
-    Nothing exercises it, so treat it as untested from here on.
+    UNUSED — no caller anywhere in the pipeline, and no test.  Treat it as
+    untested code, kept only because it is the obvious starting point for a
+    value-based selection rule, should one be wanted.  The matrix builders that
+    feed it — gridworld_core.build_stochastic_matrix and its Overcooked
+    counterpart — are unused for the same reason and kept on the same terms.
+    None of the four rules that experiment.py actually reports needs a value
+    function.
 
     Two modes, chosen by whether a reward function is supplied.
 
@@ -872,8 +937,8 @@ def value_iteration(T_R_sto, goal_state, reward_function=None,
     in distance, which is all H3's ranking needs — and 0 where the goal is
     unreachable.
 
-    Probability mode (reward_function is None).  The legacy behaviour, kept for
-    models with no reward object (e.g. Overcooked): the goal is pinned worth 1
+    Probability mode (reward_function is None), for models carrying no reward
+    object of their own (Overcooked, say): the goal is pinned worth 1
     and V is the expected discounted probability of reaching it,
 
         V(goal) = 1 ,   V(s) = γ · max_a Σ_s' P(s'|s,a) · V(s').
@@ -885,14 +950,18 @@ def value_iteration(T_R_sto, goal_state, reward_function=None,
                       overcooked_env.build_stochastic_matrix.  Already pruned to
                       the robot-reachable states; nothing is pruned here.
     goal_state      : int — the absorbing goal's row in T_R_sto, i.e.
-                      index[goal].  Used to pin V in probability mode.
+                      index[goal].  Pins V = 1 there in probability mode.
     reward_function : callable(state, action, next_state) -> float, or None.
                       When given, `states` and `actions` must be too.
     states          : list — states[i] is the original state object at row i of
                       T_R_sto (build_stochastic_matrix's kept_states), so the
                       callable can be evaluated on the pruned matrix.
     actions         : list — action labels in T_R_sto's action-axis order.
-    gamma           : discount.
+    gamma           : the *grid's* discount factor, over steps taken in the
+                      game — the same γ a GridWorld carries as `mdp.gamma`.
+                      Not the Query MDP's `q_gamma`, which discounts questions
+                      asked; the two are different numbers over different things
+                      and both default to 0.99.
 
     Returns
     -------
@@ -975,7 +1044,8 @@ def _dominance_closure(T):
 
 
 class GreedyQNet(nn.Module):
-    """Greedy query policy with the same callable interface as ExactQNet.
+    """The greedy query policies — H1, H3 and H4 — behind one callable
+    interface, shared with ExactQNet so call sites need not tell them apart.
 
     Scores are recomputed from (K_I, K_not) on every forward(); there is no 3^n
     table, which is why these run on instances the exact solver cannot be built
@@ -1022,11 +1092,11 @@ class GreedyQNet(nn.Module):
         return torch.from_numpy(np.ascontiguousarray(score, dtype=np.float32)).to(x.device)
 
 
-# The four conditions.  C_Q / p_I / gamma / p_F / oracle are accepted for
+# The four conditions.  C_Q / p_I / q_gamma / p_F / oracle are accepted for
 # signature parity with solve_query_mdp_exact and are unused by the greedy
 # rules, which never evaluate the query MDP's rewards.
 
-def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
+def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None):
     """Hypothesis 1 — one-step weighted-entropy minimisation over Φ(B, K_I)."""
     unique_B, B_to_idx = _bit_order(I, B)
@@ -1034,7 +1104,7 @@ def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                       unique_B, B_to_idx, rule="entropy")
 
 
-def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
+def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None):
     """Hypothesis 4 — the bottleneck in the most currently consistent hypotheses."""
     unique_B, B_to_idx = _bit_order(I, B)
@@ -1042,7 +1112,7 @@ def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
                       unique_B, B_to_idx, rule="marginal")
 
 
-def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, gamma=0.99, p_F=0.0,
+def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None,
                               positions=None, goal_state=None):
     """Hypothesis 3 — three tiers, with Euclidean proximity inside the middle one.
@@ -1266,7 +1336,7 @@ def evaluate_policy_on_real_human(
     c_q=-10.0,
     p_i=1.0,
     p_f=0.0,
-    gamma=0.99,
+    q_gamma=0.99,
     device="cpu",
     dominance=None,
 ):
@@ -1292,7 +1362,7 @@ def evaluate_policy_on_real_human(
     n_runs           : int  independent episodes
     I_array          : (len(I), n) bool
     b_to_int         : {bottleneck: column index} — bottleneck_index(B)
-    c_q, p_i, p_f, gamma : MDP parameters, for the reported reward only; the
+    c_q, p_i, p_f, q_gamma : MDP parameters, for the reported reward only; the
         query *count* does not depend on them, since the stopping rule is
         structural.  They must match the ones the policy was solved with.
     device           : torch device (ignored when policy_network is None)
@@ -1332,7 +1402,7 @@ def evaluate_policy_on_real_human(
         n_q, success = _run_query_episode(K_I, K_not, I_array, true_bits,
                                           choose_action, dominance)
         n_queries_arr[run]    = n_q
-        total_reward_arr[run] = n_q * c_q + gamma * (p_i if success else p_f)
+        total_reward_arr[run] = n_q * c_q + q_gamma * (p_i if success else p_f)
         success_arr[run]      = success
 
     return {

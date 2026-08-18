@@ -40,7 +40,7 @@ class PuddleWorld(GridWorld):
 
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
                  puddle_density=0.2, puddle_penalty=-1, goal_reward=10,
-                 slip_prob=0.0, discount=0.99, max_tries=DEFAULT_MAX_TRIES,
+                 slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
                  rooms_per_side=1, room_side=5, puddle_positions=None):
         self.puddle_density = puddle_density
@@ -55,7 +55,7 @@ class PuddleWorld(GridWorld):
 
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
-                         slip_prob=slip_prob, discount=discount,
+                         slip_prob=slip_prob, gamma=gamma,
                          max_tries=max_tries, obstacle_seed=obstacle_seed,
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
@@ -140,19 +140,24 @@ def sample_puddle_layout(board, puddle_density, rng, protected=()):
             if (i, j) not in set(protected)]
     return rng.sample(free, min(total_puddles, len(free)))
 
-def generate_and_visualize_puddleworld(start, goal, obstacle_density, puddle_density,
-                                       model_type="Model", obstacle_seed=None,
+def build_puddleworld(start, goal, obstacle_density, puddle_density,
+                                       obstacle_seed=None,
                                        puddle_penalty=-1, goal_reward=10,
                                        rooms_per_side=1, room_side=5, slip_prob=0.0,
                                        puddle_positions=None):
     """Generate a ``PuddleWorld``.
 
-    ``puddle_penalty`` and ``goal_reward`` are forwarded rather than dropped:
-    their ratio is what decides whether V_R encodes distance-to-goal or merely
-    local puddle density, and Hypothesis 3 ranks bottlenecks by V_R.  At a 1:1
-    ratio the goal reward is the same size as the penalties accumulated on the
-    way to it and corr(V_R, distance) averages only -0.56; the 10:1 default
-    reaches -0.82.
+    ``puddle_penalty`` and ``goal_reward`` are forwarded rather than dropped, so
+    that a caller solving one of these grids as an ordinary MDP gets a sensible
+    reward.  Their *ratio* is what matters there: at 1:1 the goal is worth no
+    more than the puddles crossed to reach it, so an optimal policy dodges water
+    instead of finishing, while the 10:1 default makes reaching the goal
+    dominate.
+
+    The benchmark pipeline reads neither of them.  Bottlenecks come from
+    reachability alone, so puddles change what a route *costs* without changing
+    which routes exist — which is why puddleworld's numbers stay close to plain
+    gridworld's.
     """
     return PuddleWorld(start=start, goal=goal,
                        obstacle_density=obstacle_density,
@@ -179,20 +184,23 @@ def _make_determinized(obstacle_density, puddle_density, model_type, visualize=F
     generated map before determinizing.
     """
     n = board_side(rooms_per_side, room_side)
-    mdp = generate_and_visualize_puddleworld(
+    mdp = build_puddleworld(
         start=(0, 0), goal=(n - 1, n - 1),
         obstacle_density=obstacle_density, puddle_density=puddle_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
         puddle_positions=puddle_positions,
-        model_type=model_type, obstacle_seed=random.randint(1, 10000))
+        obstacle_seed=random.randint(1, 10000))
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
     t0 = time.time()
     next_states, start_idx, goal_idx = augment_mdp_to_deterministic(mdp)
-    # The MDP itself is returned too: it carries the stochastic transition
-    # probabilities that determinization discards, which Hypothesis 3 needs.
+    # The MDP object is handed back alongside the matrix, because the matrix
+    # alone has forgotten the board: it is integer state IDs and nothing else.
+    # Hypothesis 3 needs to know where each state *sits* — it ranks bottlenecks
+    # by straight-line distance to the goal — and reads that off the MDP's state
+    # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
 
 

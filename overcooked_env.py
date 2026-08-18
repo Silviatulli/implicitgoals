@@ -24,9 +24,10 @@ packed as inv * NUM_POT + pot.
     start_state = 0
     goal_state  = CLIENT_SERVED
 
-build_stochastic_matrix lifts T_R into the P(s'|s,a) form Hypothesis 3's value
-iteration needs — one-hot, since this game is deterministic by construction —
-pruned to the states reachable from the start.
+Overcooked has no geometry — a state is a bit-packed (inventory, pot) pair, not
+a place on a board — so the benchmark runs every condition on it except
+Hypothesis 3, which ranks bottlenecks by straight-line distance to the goal and
+has no distance to measure here.  Its column is NaN for this game.
 
 Robot vs. human matrices
 ------------------------
@@ -143,8 +144,9 @@ def build_transition_matrix_nomove(allow_drop: bool = False, verbose: bool = Tru
           - holding ingredient X + action i (pick-up action for X) → drop X back
           - holding plate     + action 3 (grab-plate)              → drop plate back
     verbose : bool
-        If False, suppress tqdm bars and print statements (used for the silent
-        module-level build that runs at import time).
+        If False, suppress the tqdm bars and the summary print.  experiment.py
+        passes False: it rebuilds this matrix once per repetition and has a
+        progress bar of its own to keep clear.
 
     Returns
     -------
@@ -238,18 +240,18 @@ def serving_matrices_nomove(T_base, recipes):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2.  The robot's stochastic model  (Hypothesis 3)
+# 2.  The robot's stochastic model  (unused — see the docstring)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_stochastic_matrix(next_states, start_state=0):
     """Overcooked's T_R_sto — the deterministic counterpart of
     gridworld_core.build_stochastic_matrix.
 
-    DEAD CODE — nothing in the pipeline calls this any more.  It existed to feed
-    bottlenecks.value_iteration, which fed H3; H3 is now Euclidean distance to
-    the goal, which Overcooked has no geometry for, so the game has no H3 column
-    at all.  Kept rather than deleted because it still works; nothing exercises
-    it, so treat it as untested from here on.
+    UNUSED — no caller anywhere in the pipeline, and no test.  Its only consumer
+    is bottlenecks.value_iteration, which is unused on the same terms: none of
+    the selection rules the benchmark reports needs a value function.  Kept as
+    the starting point for a value-based rule, should one be wanted, and to be
+    treated as untested code until then.
 
     Overcooked is deterministic by construction: build_transition_matrix_nomove
     emits T[state, action] -> next_state, with no slip and no MDP object behind
