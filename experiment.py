@@ -90,6 +90,7 @@ import random
 import argparse
 import contextlib
 import io
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -101,12 +102,22 @@ from matplotlib.legend_handler import HandlerTuple
 from tqdm import tqdm
 
 # ── Benchmark domains ─────────────────────────────────────────────────────────
-from gridworld import generate_determinized_models as generate_determinized_gridworlds
-from puddleworld import generate_determinized_models as generate_determinized_puddleworlds
+from gridworld import (
+    generate_determinized_models as generate_determinized_gridworlds,
+    plan_determinized_models as plan_gridworlds,
+)
+from puddleworld import (
+    generate_determinized_models as generate_determinized_puddleworlds,
+    plan_determinized_models as plan_puddleworlds,
+)
 from rockworld import (
     generate_determinized_models as generate_determinized_rockworlds,
+    plan_determinized_models as plan_rockworlds,
 )
-from taxiworld import generate_determinized_models as generate_determinized_taxiworlds
+from taxiworld import (
+    generate_determinized_models as generate_determinized_taxiworlds,
+    plan_determinized_models as plan_taxiworlds,
+)
 
 from overcooked_env import (
     # no-movement MDP: state = inv * NUM_POT + pot
@@ -131,6 +142,7 @@ from bottlenecks import (
     subsets_to_array,
     bottleneck_index,
     compute_bottlenecks_per_matrix,
+    extract_bottlenecks,
     solve_query_mdp_exact,
     # the selection rules, and H2's inference-time mask
     solve_query_mdp_info_gain,
@@ -360,6 +372,96 @@ def compute_hypothesis_space(T_R, B, start_state, goal_state):
     return I, time.perf_counter() - t0
 
 
+GRID_PLANNERS = {
+    "gridworld":   plan_gridworlds,
+    "puddleworld": plan_puddleworlds,
+    "rockworld":   plan_rockworlds,
+    "taxiworld":   plan_taxiworlds,
+}
+
+
+def draw_grid_instance_lazily(game, room_side, num_humans, seed, args,
+                              max_bottlenecks):
+    """Build a grid instance one model at a time, abandoning it as soon as it
+    cannot fit under ``max_bottlenecks``.
+
+    B is the *union* of the humans' bottleneck sets, and a union only grows.  So
+    once the running union exceeds the cap, no remaining human can bring it back
+    down and none of them need building.  On taxiworld that verdict arrives after
+    about 5 humans of 20, and roughly 90% of draws are rejected this way — which
+    is where this run spends most of its time.
+
+    The robot is built last, and only if the cap is cleared.  Nothing before
+    Algorithm 1 reads T_R: compute_bottleneck_sets touches it solely for the
+    toboggan filter, which no grid game runs.
+
+    Identical to the eager path, because plan_determinized_models draws every
+    random choice up front and building consumes no randomness — so a model gets
+    the same map whether or not its siblings were skipped, and a draw that is
+    accepted here is the same instance build_grid_instance would have produced.
+
+    Returns ``(instance, oracle_sets, B_nofilter, times, t_build)`` with
+    ``instance`` None when the cap was busted.  ``t_build`` counts only what was
+    actually built.
+    """
+    extra = {}
+    if game == "puddleworld":
+        extra["puddle_density"] = args.puddle_density
+    elif game == "rockworld":
+        extra["rock_density"] = args.rock_density
+
+    times = {}
+    t_build = 0.0
+    t_bottlenecks = 0.0
+
+    t0 = time.perf_counter()
+    with _quiet():
+        build, n_models = GRID_PLANNERS[game](
+            num_humans=num_humans, obstacle_density=args.obstacle_density,
+            seed=seed, rooms_per_side=args.rooms_per_side,
+            room_side=room_side, slip_prob=args.slip_prob, **extra)
+    t_build += time.perf_counter() - t0
+
+    # Models 1..num_humans are the humans; model 0 is the robot.
+    oracle_sets, union = [], set()
+    start_state = goal_state = None
+    T_H_list = []
+    for i in range(1, n_models):
+        t0 = time.perf_counter()
+        with _quiet():
+            T_H, s0, g, _det, _mdp = build(i)
+        t_build += time.perf_counter() - t0
+        T_H_list.append(T_H)
+        # Every model of an instance shares the board, so its state space — and
+        # therefore these two indices — are the same for all of them.
+        start_state, goal_state = int(s0), int(g)
+
+        t0 = time.perf_counter()
+        with _quiet():
+            bset = frozenset(extract_bottlenecks(T_H, start_state, goal_state))
+        t_bottlenecks += time.perf_counter() - t0
+        oracle_sets.append(bset)
+        union |= bset
+        if len(union) > max_bottlenecks:
+            # Hopeless: the union cannot shrink.  Skip the rest of the humans and
+            # the robot entirely.
+            times["t_bottlenecks"] = t_bottlenecks
+            times["t_oracle_sets"] = 0.0
+            times["t_toboggan_filter"] = float("nan")
+            return None, oracle_sets, sorted(union), times, t_build
+
+    t0 = time.perf_counter()
+    with _quiet():
+        T_R, _s0, _g, _det, mdp_R = build(0)
+    t_build += time.perf_counter() - t0
+
+    times["t_bottlenecks"] = t_bottlenecks
+    times["t_oracle_sets"] = 0.0        # the union was accumulated above
+    times["t_toboggan_filter"] = float("nan")
+    return ((T_R, T_H_list, start_state, goal_state, mdp_R),
+            oracle_sets, sorted(union), times, t_build)
+
+
 # How many maps a single repetition may draw before it gives up and reports
 # nothing.  Rejecting an instance is cheap and common (see draw_instance_under_cap
 # for the two conditions it has to pass), so the budget is generous: giving up is
@@ -395,7 +497,7 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
          queries.  Those instances say nothing about which rule is better, so
          they are drawn past rather than reported.
 
-    Returns (instance, bundle, t_build, t_rejected, n_draws, t_accepted_start).
+    Returns (instance, bundle, t_build, t_rejected, n_draws, t_accepted).
     `instance` is None
     when all `max_tries` draws failed one of the two, which skips the repetition
     — the one case left where a repetition produces no episode.  The bundle
@@ -405,10 +507,16 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
     to build" and nothing else.  Everything burned on the rejected draws — their
     builds, their bottleneck passes *and* their Algorithm 1 runs — is reported
     separately, as `t_rejected`.
-    `t_accepted_start` is the perf_counter reading taken at the top of the
-    accepted attempt, the instant its seed was fixed and before anything was
-    built from it; the caller measures t_total from there so the reported cost is
-    one instance's pipeline and excludes the search for a usable map.
+    `t_accepted` is how long the accepted attempt took, from fixing its seed to
+    having I in hand.  The caller adds what the solves and simulations then cost
+    to get `t_total`, so the reported figure is one instance's pipeline and
+    excludes the search for a usable map.
+
+    A duration rather than a start timestamp because the two halves need not run
+    in the same process: with --jobs above 1 the draw happens in a worker and the
+    solve later in the parent, and a wall-clock span across them would be mostly
+    queueing.  Summing the two measured intervals is what one instance costs
+    either way.
 
     Sampling note: neither constraint is free.  Conditioning on |B| keeps the
     maps with fewer mandatory waypoints; conditioning on |I| keeps the ones whose
@@ -425,31 +533,35 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
         t0 = time.perf_counter()
         attempt_seed = seed + attempt * RETRY_SEED_STRIDE
         if game == "overcooked":
+            # Eager: the toboggan filter can *shrink* B below the cap, so an
+            # oversized raw union proves nothing here and there is no sound point
+            # to stop early at.  Overcooked never redraws anyway (n_draws = 1.0).
             instance, t_build = build_overcooked_instance(
                 num_humans=num_humans, allow_drop=args.overcooked_allow_drop,
                 seed=attempt_seed)
+            T_R, T_H_list, start_state, goal_state = instance[:4]
+            oracle_sets, B_nofilter, B, times = compute_bottleneck_sets(
+                T_R, T_H_list, start_state, goal_state, filter_toboggans)
         else:
-            instance, t_build = build_grid_instance(
-                game, room_side, num_humans, seed=attempt_seed,
-                obstacle_density=args.obstacle_density,
-                puddle_density=args.puddle_density,
-                rock_density=args.rock_density,
-                rooms_per_side=args.rooms_per_side,
-                slip_prob=args.slip_prob)
-        # instance is a 5-tuple for the grid games and a 4-tuple for Overcooked,
-        # but the first four slots are the same four things in both.
-        T_R, T_H_list, start_state, goal_state = instance[:4]
-        oracle_sets, B_nofilter, B, times = compute_bottleneck_sets(
-            T_R, T_H_list, start_state, goal_state, filter_toboggans)
+            # Lazy: stop building the moment the running union busts the cap.
+            instance, oracle_sets, B_nofilter, times, t_build = \
+                draw_grid_instance_lazily(game, room_side, num_humans,
+                                          attempt_seed, args, max_bottlenecks)
+            B = B_nofilter          # no grid game runs the toboggan filter
+            if instance is None:
+                t_rejected += time.perf_counter() - t0
+                continue
+            _, _, start_state, goal_state = instance[:4]
         if len(B) <= max_bottlenecks:
             # Only now is Algorithm 1 affordable to run, and it has to run here
             # rather than downstream because |I| is the second constraint.
             I, times["t_algorithm1"] = compute_hypothesis_space(
-                T_R, B, start_state, goal_state)
+                instance[0], B, start_state, goal_state)
             if len(I) >= min_hypotheses:
                 status_line(None)
                 return (instance, (oracle_sets, B_nofilter, B, I, times),
-                        t_build, t_rejected, attempt + 1, t0)
+                        t_build, t_rejected, attempt + 1,
+                        time.perf_counter() - t0)
         # Rejected on one constraint or the other: this instance and its matrices
         # go out of scope here and the next iteration builds a fresh one over
         # them.  Only the cost survives.
@@ -721,6 +833,106 @@ def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int, dominance=None
     return int(res["n_queries"][0]), int(res["success"][0])
 
 
+def _draw_one(payload):
+    """Phase 1 for a single repetition: draw until an instance is accepted.
+
+    Runs in a worker process when --jobs > 1, and inline when it is 1.  Returns
+    ``(instance, bundle, t_build, t_rejected, n_draws, t_accepted, note)``, where
+    `note` is None on success and the skip reason otherwise.
+
+    Safe to run out of order, in another process, or not at all, because **a
+    repetition is a pure function of its seed**.  main() reseeds both RNGs from a
+    seed it computes arithmetically, draw_instance_under_cap reseeds again per
+    attempt from ``seed + attempt * RETRY_SEED_STRIDE``, and
+    plan_determinized_models makes every remaining draw at a known point.  No
+    state carries from one repetition to the next, so scheduling cannot change
+    what any of them produces.
+    """
+    game, room_side, num_humans, seed, args, max_bottlenecks, min_hyp = payload
+    # A worker has no progress bar to write to, and several of them sharing
+    # stdout would shred the parent's.  Swallow the retry status instead.
+    set_status_sink(lambda text: None)
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        instance, bundle, t_build, t_rejected, n_draws, t_accepted = \
+            draw_instance_under_cap(game, room_side, num_humans, seed, args,
+                                    max_bottlenecks, min_hypotheses=min_hyp)
+        note = None if instance is not None else (
+            f"no instance with |B| <= {max_bottlenecks} and "
+            f"|I| >= {min_hyp} in {MAX_INSTANCE_TRIES:,} draws")
+    except UnsolvableLayout as exc:
+        # The generator could not lay out a solvable board at these densities.
+        # It raises instead of substituting an obstacle-free one, so the
+        # repetition is reported as NaN rather than quietly averaging in a board
+        # the run never asked for.  Caught per repetition so one impossible
+        # configuration cannot take the whole sweep down with it.
+        instance = bundle = None
+        t_build = t_rejected = n_draws = t_accepted = float("nan")
+        note = str(exc)
+    return instance, bundle, t_build, t_rejected, n_draws, t_accepted, note
+
+
+def resolve_jobs(requested):
+    """How many worker processes phase 1 should use.
+
+    ``0`` means auto: one per core bar one, capped at 8.
+
+    Two reasons for the cap, neither of them cores.  Memory: a worker imports
+    this module, torch included, and sits at ~275 MB RSS whether or not it is
+    drawing — 8 of them is ~2.2 GB held for the whole run, on top of the ~4.7 GB
+    phase 2 peaks at when |B| = 17.  And diminishing returns: phase 2 is ~14% of
+    the run and stays sequential, so Amdahl caps the whole sweep near 7x however
+    many workers phase 1 gets.
+
+    Auto returns 1 on a single- or dual-core machine, so the default degrades to
+    the sequential path on small hardware with nothing to configure.  ``--jobs 1``
+    forces it everywhere, and a larger value than the cap can be asked for
+    explicitly.
+    """
+    if requested and requested > 0:
+        return int(requested)
+    return max(1, min((os.cpu_count() or 1) - 1, 8))
+
+
+def draw_phase(game, room_side, num_humans, seeds, args, pool, bar, postfix):
+    """Phase 1 for every repetition of one configuration, in seed order.
+
+    ``pool`` is a ProcessPoolExecutor, or None to draw inline.  Only the *draw*
+    is parallelised: it is ~86% of the run and costs about a megabyte per
+    instance, whereas phase 2 allocates 3^|B| knowledge states — ~4.7 GB at
+    |B| = 17 — and would exhaust memory long before it exhausted cores.  So the
+    expensive-in-time half is spread out and the expensive-in-memory half is
+    left alone.
+
+    The pool is owned by main() and outlives every configuration, because a
+    worker pays for importing this module — torch and matplotlib included — the
+    moment it starts.  Spawning one pool per configuration would pay that
+    fifteen times over for a sweep that runs each of them once.
+
+    Results are indexed by repetition, never by completion order, so the rows are
+    assembled exactly as a sequential run assembles them.
+    """
+    payloads = [(game, room_side, num_humans, s, args,
+                 args.max_bottlenecks, args.min_hypotheses) for s in seeds]
+    n = len(payloads)
+    if pool is None:
+        out = []
+        for i, p in enumerate(payloads):
+            bar.set_postfix_str(f"{postfix} | drawing {i + 1}/{n}")
+            out.append(_draw_one(p))
+        bar.set_postfix_str(postfix)
+        return out
+
+    results = [None] * n
+    futures = {pool.submit(_draw_one, p): i for i, p in enumerate(payloads)}
+    for done, fut in enumerate(as_completed(futures), start=1):
+        results[futures[fut]] = fut.result()
+        bar.set_postfix_str(f"{postfix} | drawing {done}/{n}")
+    bar.set_postfix_str(postfix)
+    return results
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main — every (game, size, humans) combination
 # ─────────────────────────────────────────────────────────────────────────────
@@ -882,6 +1094,14 @@ def parse_args(argv=None):
                    help="base seed; each combination is offset from it (default: 0)")
     p.add_argument("--out-dir", default="results",
                    help="output folder, created if missing (default: results)")
+    p.add_argument("--jobs", type=int, default=0,
+                   help="worker processes for the draw phase, which is ~86%% of "
+                        "the run; 0 = auto (cores - 1, capped at 8), 1 = "
+                        "sequential.  Only the draw is parallel: the exact Query "
+                        "MDP allocates 3^|B| states (~4.7 GB at |B|=17) and stays "
+                        "sequential, which also caps the whole sweep at ~7x. "
+                        "Results do not depend on this: a repetition is a pure "
+                        "function of its seed (default: 0)")
     return p.parse_args(argv)
 
 
@@ -906,6 +1126,15 @@ def main(argv=None):
               f"-> boards {boards}"
               + ("  (one room, no walls: the open board)" if r == 1
                  else f"  ({2 * r * (r - 1)} one-way doors per board)"))
+
+    n_jobs = resolve_jobs(args.jobs)
+    if n_jobs > 1:
+        print(f"[jobs] drawing on {n_jobs} worker processes; the solve stays "
+              f"sequential (3^|B| states).  Results are unaffected — a "
+              f"repetition is a pure function of its seed.")
+    # One pool for the whole sweep: a worker imports this module on startup, and
+    # that cost should be paid once, not once per configuration.
+    pool = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
 
     time_rows, query_rows = [], []
     # One tqdm tick per repetition, so the bar reflects the real work: a
@@ -937,34 +1166,25 @@ def main(argv=None):
         job = f"{label}, {num_humans} humans"
         show_status()
 
-        reps, counts_per_rep, successes = [], [], []
-        for rep in range(args.num_simu):
-            # A distinct seed per repetition — that is what makes the average
-            # meaningful for the grid games: each repetition is a new map.
-            seed = args.seed + job_idx * args.num_simu + rep
-            random.seed(seed)
-            np.random.seed(seed)
+        # ── phase 1: draw every repetition of this configuration ────────────
+        # A distinct seed per repetition — that is what makes the average
+        # meaningful for the grid games: each repetition is a new map.  The seeds
+        # are arithmetic, so phase 1 needs no state from phase 2 and the draws
+        # can run in any order, in any process.
+        seeds = [args.seed + job_idx * args.num_simu + rep
+                 for rep in range(args.num_simu)]
+        drawn = draw_phase(game, room_side, num_humans, seeds, args, pool,
+                           bar, job)
 
-            note = None
-            try:
-                instance, bundle, t_build, t_rejected, n_draws, t_start = \
-                    draw_instance_under_cap(
-                        game, room_side, num_humans, seed, args,
-                        args.max_bottlenecks, min_hypotheses=args.min_hypotheses)
-                if instance is None:
-                    note = (f"no instance with |B| <= {args.max_bottlenecks} and "
-                            f"|I| >= {args.min_hypotheses} in "
-                            f"{MAX_INSTANCE_TRIES:,} draws")
-            except UnsolvableLayout as exc:
-                # The generator could not lay out a solvable board at these
-                # densities.  It raises instead of substituting an obstacle-free
-                # one, so the repetition is reported as NaN rather than quietly
-                # averaging in a board the run never asked for.  Caught here and
-                # not higher up so one impossible configuration cannot take the
-                # whole sweep down with it.
-                instance = bundle = None
-                t_build = t_rejected = n_draws = t_start = float("nan")
-                note = str(exc)
+        # ── phase 2: solve and simulate, one repetition at a time ───────────
+        # Sequential on purpose: the exact Query MDP allocates 3^|B| knowledge
+        # states, so this is the memory-bound half and running it wide would
+        # exhaust RAM long before it exhausted cores.
+        reps, counts_per_rep, successes = [], [], []
+        for rep, seed in enumerate(seeds):
+            (instance, bundle, t_build, t_rejected,
+             n_draws, t_accepted, note) = drawn[rep]
+            t_phase2 = time.perf_counter()
 
             if note is not None:
                 tqdm.write(f"skipping repetition: {note}")
@@ -989,13 +1209,15 @@ def main(argv=None):
             row["t_build"]    = t_build
             row["t_rejected"] = t_rejected
             row["n_draws"]    = n_draws
-            # Clock starts at the accepted draw's seed, so t_total is what one
-            # usable instance costs end to end — its build (determinization
-            # included), Algorithm 1, the solves and the simulations — and never
-            # the redraws that preceded it.  NaN when every draw failed: there is
-            # no accepted instance to time.
+            # What one usable instance costs end to end: the accepted draw (its
+            # build, determinization included, plus Algorithm 1) and then the
+            # solves and simulations — never the redraws that preceded it.  The
+            # two halves are added rather than spanned by one clock, because with
+            # --jobs > 1 they happen in different processes and a wall-clock span
+            # across them would be mostly queueing.  NaN when every draw failed:
+            # there is no accepted instance to time.
             row["t_total"]    = (float("nan") if instance is None
-                                 else time.perf_counter() - t_start)
+                                 else t_accepted + time.perf_counter() - t_phase2)
 
             reps.append(row)
             counts_per_rep.append(counts)
@@ -1013,6 +1235,8 @@ def main(argv=None):
                                              conditions))
     bar.close()
     set_status_sink(None)          # the bar is gone; status goes back to stdout
+    if pool is not None:
+        pool.shutdown()
 
     times_path   = os.path.join(args.out_dir, "compute_times.csv")
     queries_path = os.path.join(args.out_dir, "query_counts.csv")

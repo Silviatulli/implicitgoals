@@ -120,21 +120,35 @@ def get_reachable_states(T, start_state):
 
 def _build_adjacency(possible_bottlenecks, T, start_state=0):
     """
-    Collapse per-state reachability into a compact bottleneck-to-bottleneck
-    adjacency matrix — the only structure Algorithm 1 needs during its search.
+    Collapse per-state reachability into the two structures Algorithm 1 searches
+    on — the only ones it needs.
 
     Returns
     -------
-    from_start      : bool array, shape (n,)    from_start[j]    = start can reach j
-    from_bottleneck : bool array, shape (n, n)  from_bottleneck[i, j] = i can reach j
+    from_start   : list[bool], length n
+                   from_start[j] is True iff the start state can reach j.
+    predecessors : list[int], length n
+                   bit i of predecessors[j] is set iff bottleneck i can reach
+                   bottleneck j.  One integer per bottleneck, not a column of a
+                   bool matrix.
+
+    Bitmasks rather than a numpy matrix because of the shape of the inner test.
+    The search asks, over and over, "can *any* of the bottlenecks an order might
+    finish on reach j?" — and the set of finishing points is itself a bitmask
+    (see check_sequential_achievability).  Held as integers the whole test is a
+    single ``&``; held as a numpy column it costs a list comprehension and an
+    array allocation, on each of the ~10^6 calls one instance makes.
     """
     masks = np.stack(
         [get_reachable_states(T, start_state)] +
         [get_reachable_states(T, b) for b in possible_bottlenecks]
     )
     idx = np.array(possible_bottlenecks)
-    adj = masks[:, idx]           # shape (n+1, n)
-    return adj[0], adj[1:]        # from_start (n,), from_bottleneck (n, n)
+    adj = masks[:, idx]           # (n+1, n); row 0 is the start, rows 1.. the bottlenecks
+    n = len(possible_bottlenecks)
+    from_start = [bool(v) for v in adj[0]]
+    predecessors = [sum(1 << i for i in range(n) if adj[1 + i, j]) for j in range(n)]
+    return from_start, predecessors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,7 +377,7 @@ def filter_maximal_subsets(masks):
     return kept_list
 
 
-def check_sequential_achievability(mask, from_start, from_bottleneck, n, memo):
+def check_sequential_achievability(mask, from_start, predecessors, memo):
     """
     Paper's CheckAchievability test — is there *some* order in which the subset
     encoded by `mask` can be visited, one bottleneck after another?
@@ -387,8 +401,11 @@ def check_sequential_achievability(mask, from_start, from_bottleneck, n, memo):
       * a subset is solved at most once however many DFS branches ask for it
         (the paper's "caching" step).
 
-    Bitmasks are Python ints rather than numpy words, so n > 63 bottlenecks are
-    safe.
+    Everything here is a Python int, which is what keeps this cheap.  Both the
+    set of finishing points and `predecessors[b]` (see _build_adjacency) are
+    bitmasks over the same bit order, so "can any finishing point reach b?" is
+    one `&` rather than a rebuilt numpy array.  Arbitrary-precision ints also
+    mean n > 63 bottlenecks stay correct.
     """
 
     if mask in memo:
@@ -399,18 +416,22 @@ def check_sequential_achievability(mask, from_start, from_bottleneck, n, memo):
         return True
 
     ends = 0
-    for b in (i for i in range(n) if (mask >> i) & 1):
-        prev_mask = mask & ~(1 << b)
-        if not check_sequential_achievability(prev_mask, from_start, from_bottleneck, n, memo):
+    remaining = mask
+    while remaining:
+        low = remaining & -remaining        # lowest set bit, isolated
+        b = low.bit_length() - 1
+        remaining ^= low
+        prev_mask = mask ^ low
+        if not check_sequential_achievability(prev_mask, from_start, predecessors, memo):
             continue
         prev_ends = memo[prev_mask]
         if prev_ends == -1:         # this implies that mask = {b}, and thus prev_mask = {}
             if from_start[b]:       # it thus suffices to check adjacency.
-                ends |= 1 << b
-        else:
-            prev_ends_bool = np.array([(prev_ends >> i) & 1 for i in range(n)], dtype=bool)
-            if np.any(prev_ends_bool & from_bottleneck[:, b]):
-                ends |= 1 << b
+                ends |= low
+        elif prev_ends & predecessors[b]:
+            # Some order covering prev_mask finishes on a bottleneck that
+            # reaches b, so that order extends to cover mask and end on b.
+            ends |= low
 
     memo[mask] = ends
     return ends != 0
@@ -437,7 +458,7 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
 
     if verbose:
         print(f"Building bottleneck adjacency for {n} bottlenecks...")
-    from_start, from_bottleneck = _build_adjacency(possible_bottlenecks, T_R, start_state)
+    from_start, predecessors = _build_adjacency(possible_bottlenecks, T_R, start_state)
     memo             = {}
     achievable_masks = []
     _counter         = [0]
@@ -463,11 +484,13 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
             return True
         if mask == 0:                   # visit nothing, head straight for the goal
             return bool(from_start[goal_bit])
-        end_bits = memo[mask]           # which bottlenecks an order can finish on
+        # memo[mask] is the set of bottlenecks an order can finish on;
+        # predecessors[goal_bit] the set that can reach the goal.  They overlap
+        # iff some order covering `mask` can still get there.
+        #
         # A subset containing the goal needs no special case: the goal is
         # reachable from the goal, so it is its own valid continuation.
-        return any((end_bits >> i) & 1 and from_bottleneck[i, goal_bit]
-                   for i in range(n))
+        return bool(memo[mask] & predecessors[goal_bit])
 
     def generate_subsets(index, current_mask):
         _counter[0] += 1
@@ -479,7 +502,7 @@ def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, go
             return
         generate_subsets(index + 1, current_mask)
         new_mask = current_mask | (1 << index)
-        if check_sequential_achievability(new_mask, from_start, from_bottleneck, n, memo):
+        if check_sequential_achievability(new_mask, from_start, predecessors, memo):
             generate_subsets(index + 1, new_mask)
 
     if verbose:

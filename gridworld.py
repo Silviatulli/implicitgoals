@@ -49,9 +49,15 @@ def build_gridworld(start, goal, obstacle_density,
 # High-level driver — robot + N humans, with compute timing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_determinized(obstacle_density, model_type, visualize=False,
+def _make_determinized(obstacle_density, model_type, obstacle_seed,
+                       visualize=False,
                        rooms_per_side=1, room_side=5, slip_prob=0.0):
     """Generate one grid and determinize it; returns (next_states, s0, g, det_time).
+
+    ``obstacle_seed`` is passed in rather than drawn here, which is what lets
+    plan_determinized_models draw every seed up front and build the models
+    later, or not at all — see there.  A model's map depends only on the seed it
+    is handed, never on when it is built.
 
     The two corners are derived from the same board the grid will build, so they
     cannot name a cell that is off it.  If ``visualize`` is True, print the
@@ -63,7 +69,7 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
         obstacle_density=obstacle_density,
         rooms_per_side=rooms_per_side,
         room_side=room_side, slip_prob=slip_prob,
-        obstacle_seed=random.randint(1, 10000))
+        obstacle_seed=obstacle_seed)
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
@@ -75,6 +81,45 @@ def _make_determinized(obstacle_density, model_type, visualize=False,
     # by straight-line distance to the goal — and reads that off the MDP's state
     # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
+
+
+def plan_determinized_models(num_humans=3, obstacle_density=0.1, seed=None,
+                             visualize=False, rooms_per_side=1, room_side=4,
+                             slip_prob=0.0):
+    """Draw every random choice this instance makes, and build nothing yet.
+
+    Returns ``(build, n_models)``.  ``build(i)`` determinizes model ``i`` — 0 is
+    the robot, 1..num_humans the humans — and hands back exactly what
+    _make_determinized does.  Models may be built in any order, or not at all.
+
+    Why this exists.  experiment.py throws most instances away, and it decides
+    that from ``B``, the *union* of the humans' bottleneck sets.  A union only
+    grows, so once it exceeds --max-bottlenecks the remaining humans cannot save
+    it and need never be built.  On taxiworld that proves the instance
+    unaffordable after about 5 humans of 20.
+
+    That shortcut is only sound if stopping early changes nothing about the
+    instances that *are* built.  It does not, because every random draw happens
+    here, in one place, in the order generate_determinized_models makes them:
+    the per-model obstacle seeds are taken up front, and building consumes no
+    randomness at all.  So model i gets the same seed, and the same map, however
+    many of its siblings were skipped.
+    """
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    # One obstacle seed per model, robot first — the order the eager driver used
+    # to draw them one at a time.
+    seeds = [random.randint(1, 10000) for _ in range(num_humans + 1)]
+
+    def build(i):
+        label = "Robot Model" if i == 0 else f"Human Model {i}"
+        return _make_determinized(obstacle_density, label, seeds[i], visualize,
+                                  rooms_per_side=rooms_per_side,
+                                  room_side=room_side, slip_prob=slip_prob)
+
+    return build, num_humans + 1
 
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
@@ -110,17 +155,12 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
       'determinizing_times'      : [robot_time, human1_time, ...]
       'total_determinizing_time' : float (seconds)
     """
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-
-    robot = _make_determinized(obstacle_density, "Robot Model", visualize,
-                               rooms_per_side=rooms_per_side,
-                               room_side=room_side, slip_prob=slip_prob)
-    humans = [_make_determinized(obstacle_density, f"Human Model {i + 1}",
-                                 visualize, rooms_per_side=rooms_per_side,
-                                 room_side=room_side, slip_prob=slip_prob)
-              for i in range(num_humans)]
+    build, n_models = plan_determinized_models(
+        num_humans=num_humans, obstacle_density=obstacle_density, seed=seed,
+        visualize=visualize, rooms_per_side=rooms_per_side,
+        room_side=room_side, slip_prob=slip_prob)
+    robot = build(0)
+    humans = [build(i) for i in range(1, n_models)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
     total = float(sum(det_times))

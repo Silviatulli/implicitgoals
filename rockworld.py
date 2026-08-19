@@ -39,12 +39,12 @@ Quick start
     out = generate_determinized_models(rooms_per_side=3, room_side=3,
                                        num_humans=3, obstacle_density=0.1,
                                        seed=0)
+    T_R, s0, g = out["robot"][:3]
+    print(out["total_determinizing_time"])
 
 The board has to be large enough for `rock_density` to yield at least one
 *valuable* rock, or the goal can never absorb and RockWorld raises.  At the
 default densities that means roughly 30 cells or more.
-    T_R, s0, g = out["robot"][:3]
-    print(out["total_determinizing_time"])
 """
 
 import time
@@ -332,7 +332,8 @@ def build_rockworld(start, goal, obstacle_density, rock_density,
 # High-level driver — robot + N humans, with compute timing
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_determinized(obstacle_density, rock_density, model_type, visualize=False,
+def _make_determinized(obstacle_density, rock_density, model_type,
+                       obstacle_seed, visualize=False,
                        rooms_per_side=1, room_side=5, slip_prob=0.0,
                        valuable_positions=None, dangerous_positions=None):
     """Generate one rock world and determinize it; returns (next_states, s0, g, det_time).
@@ -349,7 +350,7 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
         room_side=room_side, slip_prob=slip_prob,
         valuable_positions=valuable_positions,
         dangerous_positions=dangerous_positions,
-        obstacle_seed=random.randint(1, 10000))
+        obstacle_seed=obstacle_seed)
     if visualize:
         print(f"\n{model_type}:")
         mdp.visualize()
@@ -361,6 +362,41 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
     # by straight-line distance to the goal — and reads that off the MDP's state
     # space, where state[0] is the (row, col) cell.
     return next_states, start_idx, goal_idx, time.time() - t0, mdp
+
+
+def plan_determinized_models(num_humans=3, obstacle_density=0.1,
+                             rock_density=0.1, seed=None, visualize=False,
+                             rooms_per_side=1, room_side=4, slip_prob=0.0):
+    """Draw every random choice this instance makes, and build nothing yet.
+
+    See gridworld.plan_determinized_models for why this split exists.  The order
+    of the draws is the order generate_determinized_models made them: the shared
+    rock layout first, then one obstacle seed per model, robot first.
+    """
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    # One rock layout for the whole instance, as with the start, the goal, the
+    # doors and TaxiWorld's passenger; only the obstacles vary between models.
+    # Drawing it per model would give each human a different set of collectable
+    # cells, so "reach the goal carrying" would mean a different task in each
+    # one and the bottleneck sets the pipeline unions would not be comparable.
+    size = board_side(rooms_per_side, room_side)
+    valuable_positions, dangerous_positions = sample_rock_layout(
+        size, rock_density, random, protected=((0, 0), (size - 1, size - 1)))
+    seeds = [random.randint(1, 10000) for _ in range(num_humans + 1)]
+
+    def build(i):
+        label = "Robot Model" if i == 0 else f"Human Model {i}"
+        return _make_determinized(obstacle_density, rock_density, label,
+                                  seeds[i], visualize,
+                                  rooms_per_side=rooms_per_side,
+                                  room_side=room_side, slip_prob=slip_prob,
+                                  valuable_positions=valuable_positions,
+                                  dangerous_positions=dangerous_positions)
+
+    return build, num_humans + 1
 
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
@@ -388,30 +424,12 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
     dict: 'robot', 'humans', 'determinizing_times', 'total_determinizing_time'
     (each model is a tuple ``(next_states, start_idx, goal_idx, det_time)``)
     """
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-
-    # One rock layout for the whole instance, as with the start, the goal, the
-    # doors and TaxiWorld's passenger; only the obstacles vary between models.
-    # Drawing it per model would give each human a different set of collectable
-    # cells, so "reach the goal carrying" would mean a different task in each
-    # one and the bottleneck sets the pipeline unions would not be comparable.
-    size = board_side(rooms_per_side, room_side)
-    valuable_positions, dangerous_positions = sample_rock_layout(
-        size, rock_density, random, protected=((0, 0), (size - 1, size - 1)))
-
-    robot = _make_determinized(obstacle_density, rock_density, "Robot Model", visualize,
-                               rooms_per_side=rooms_per_side,
-                               room_side=room_side, slip_prob=slip_prob,
-                               valuable_positions=valuable_positions,
-                               dangerous_positions=dangerous_positions)
-    humans = [_make_determinized(obstacle_density, rock_density, f"Human Model {i + 1}",
-                                 visualize, rooms_per_side=rooms_per_side,
-                                 room_side=room_side, slip_prob=slip_prob,
-                                 valuable_positions=valuable_positions,
-                                 dangerous_positions=dangerous_positions)
-              for i in range(num_humans)]
+    build, n_models = plan_determinized_models(
+        num_humans=num_humans, obstacle_density=obstacle_density,
+        rock_density=rock_density, seed=seed, visualize=visualize,
+        rooms_per_side=rooms_per_side, room_side=room_side, slip_prob=slip_prob)
+    robot = build(0)
+    humans = [build(i) for i in range(1, n_models)]
 
     det_times = [robot[3]] + [h[3] for h in humans]
     total = float(sum(det_times))
