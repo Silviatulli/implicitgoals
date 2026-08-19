@@ -470,6 +470,27 @@ class GridWorld:
         """
         return self.check_goal_reached(state[0])
 
+    def _reachable_positions(self, origin=None):
+        """Cells reachable from ``origin`` (the start by default) by moves.
+
+        Obstacles block, and so does the wrong side of a one-way door: this walks
+        ``get_all_neighbors``, the directed edge set.  Reachability is therefore
+        not symmetric, which is why the caller says where it starts.
+
+        Lives on the base class because two games need to ask the question in
+        legs — TaxiWorld must reach the passenger *then* the destination,
+        RockWorld a valuable rock *then* the goal — and a plain start-to-goal
+        walk cannot answer either.
+        """
+        origin = self.start_pos if origin is None else origin
+        seen, frontier = {origin}, [origin]
+        while frontier:
+            for nxt, _ in self.get_all_neighbors(frontier.pop()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+        return seen
+
     def check_for_path(self):
         if self.start_pos is None or self.goal_pos is None:
             return False

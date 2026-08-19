@@ -15,7 +15,7 @@ Quick start
 -----------
     from puddleworld import generate_determinized_models
     out = generate_determinized_models(room_side=4, num_humans=3,
-                                       obstacle_density=0.1, puddle_density=0.2,
+                                       obstacle_density=0.1, puddle_density=0.1,
                                        seed=0)
     T_R, s0, g = out["robot"][:3]
     print(out["total_determinizing_time"])
@@ -39,7 +39,7 @@ class PuddleWorld(GridWorld):
     do not block movement, so transitions match a plain grid's."""
 
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
-                 puddle_density=0.2, puddle_penalty=-1, goal_reward=10,
+                 puddle_density=0.1, puddle_penalty=-1, goal_reward=10,
                  slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
                  rooms_per_side=1, room_side=5, puddle_positions=None):
@@ -205,7 +205,7 @@ def _make_determinized(obstacle_density, puddle_density, model_type, visualize=F
 
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
-                                 puddle_density=0.2, seed=None, verbose=True,
+                                 puddle_density=0.1, seed=None, verbose=True,
                                  visualize=False, rooms_per_side=1, room_side=4,
                                  slip_prob=0.0):
     """Build a robot model + ``num_humans`` human PuddleWorld models and determinize each.
@@ -275,7 +275,7 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
 
 if __name__ == "__main__":
     out = generate_determinized_models(room_side=4, num_humans=3,
-                                       obstacle_density=0.1, puddle_density=0.2, seed=0, visualize=True)
+                                       obstacle_density=0.1, puddle_density=0.1, seed=0, visualize=True)
     T_R, s0, g, _ = out["robot"]
     print("\nRobot determinized transition array shape:", T_R.shape)
     print("start index:", s0, " goal index:", g)

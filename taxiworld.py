@@ -89,22 +89,6 @@ class TaxiWorld(GridWorld):
         """
         return super().protected_cells() | {self.passenger_loc}
 
-    def _reachable_positions(self, origin=None):
-        """Cells reachable from ``origin`` (the start by default) by moves.
-
-        Obstacles block, and so does the wrong side of a one-way door: this walks
-        ``get_all_neighbors``, the directed edge set.  Reachability is therefore
-        not symmetric, which is why the caller says where it starts.
-        """
-        origin = self.start_pos if origin is None else origin
-        seen, frontier = {origin}, [origin]
-        while frontier:
-            for nxt, _ in self.get_all_neighbors(frontier.pop()):
-                if nxt not in seen:
-                    seen.add(nxt)
-                    frontier.append(nxt)
-        return seen
-
     def check_for_path(self):
         """Is there a trajectory from the initial state to the *goal state*?
 

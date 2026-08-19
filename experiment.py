@@ -105,7 +105,6 @@ from gridworld import generate_determinized_models as generate_determinized_grid
 from puddleworld import generate_determinized_models as generate_determinized_puddleworlds
 from rockworld import (
     generate_determinized_models as generate_determinized_rockworlds,
-    MAX_VALUABLE_ROCKS,
 )
 from taxiworld import generate_determinized_models as generate_determinized_taxiworlds
 
@@ -211,7 +210,7 @@ def _quiet():
 
 
 def build_grid_instance(game, room_side, num_humans, seed=None, obstacle_density=0.1,
-                        puddle_density=0.2, rock_density=0.3, rooms_per_side=3,
+                        puddle_density=0.1, rock_density=0.1, rooms_per_side=3,
                         slip_prob=0.0):
     """Generate + determinize one grid-domain instance.
 
@@ -817,9 +816,10 @@ def parse_args(argv=None):
                         "rooms-per-side x this (default: 5, so a 25x25 board)")
     p.add_argument("--obstacle-density", type=float, default=0.05,
                    help="obstacle density of the four grid games (default: 0.05)")
-    p.add_argument("--puddle-density", type=float, default=0.2,
-                   help="puddle density, puddleworld only (default: 0.2, "
-                        "matches PuddleWorld's own default)")
+    p.add_argument("--puddle-density", type=float, default=0.1,
+                   help="puddle density, puddleworld only (default: 0.1, "
+                        "matches --rock-density so the three grid variants "
+                        "differ in kind and not in how much they scatter)")
     p.add_argument("--rock-density", type=float, default=0.1,
                    help="rock density, rockworld only (default: 0.1)")
     p.add_argument("--slip-prob", type=float, default=0.0,
@@ -885,68 +885,6 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-# A RockWorld board above this many states is flagged as slow before the sweep
-# starts.  An 8x8 board is 505 states at the default densities and already costs
-# ~3.4 s per repetition against ~0.08 s for gridworld, so the cut sits just below
-# it and leaves 6x6 (281) unflagged.
-ROCKWORLD_SLOW_STATES = 400
-
-
-def _rockworld_state_estimate(board, rock_density, valuable_rock_ratio=0.4):
-    """States of one RockWorld board: board^2 positions x 2^k collection sets.
-
-    ``board`` is the side of the whole grid, *not* the room side that
-    --room-sides sweeps: the rocks are scattered over the entire board, so it is
-    board_side() that drives the state count and therefore the cost.
-
-    Mirrors RockWorld.place_rocks and create_state_space — k valuable rocks,
-    capped at MAX_VALUABLE_ROCKS, contribute one bit each, and the goal collapses
-    to a single sink whatever has been collected (hence the -1 / +1).
-    `valuable_rock_ratio` repeats RockWorld's own default; the experiment never
-    overrides it, so it is not exposed on the command line.
-    """
-    total_rocks = int(board * board * rock_density)
-    k = min(int(total_rocks * valuable_rock_ratio), MAX_VALUABLE_ROCKS)
-    return (board * board - 1) * 2 ** k + 1
-
-
-def _warn_slow_rockworld(jobs, num_simu, rock_density, rooms_per_side=3):
-    """Announce the RockWorld jobs that will crawl, and where on the bar.
-
-    Nothing here is at risk of diverging or being skipped.  RockWorld carries
-    the set of collected rocks inside the state, so its state space is the board
-    multiplied by 2^k for k valuable rocks, and every stage that walks it — the
-    determinization above all — is an order of magnitude slower per repetition
-    than on a plain grid.  Printing the slice of the progress bar those jobs
-    occupy is the whole point: a long stretch of near-frozen bar in that range is
-    expected, not a hang.
-    """
-    slow = [i for i, (game, room_side, _) in enumerate(jobs)
-            if game == "rockworld"
-            and _rockworld_state_estimate(board_side(rooms_per_side, room_side),
-                                          rock_density) >= ROCKWORLD_SLOW_STATES]
-    if not slow:
-        return
-    # The flagged jobs are contiguous (one game, sizes in order), so first and
-    # last bound the whole stretch of the bar they own.
-    total = len(jobs) * num_simu
-    lo = 100.0 * slow[0] * num_simu / total
-    hi = 100.0 * (slow[-1] + 1) * num_simu / total
-    # Report the board, and the room side that produced it: --room-sides named the
-    # second, but it is the first that sets the state count being warned about.
-    room_sides = sorted({jobs[i][1] for i in slow})
-    sizes = ", ".join(
-        f"{board_side(rooms_per_side, c)}x{board_side(rooms_per_side, c)} boards "
-        f"({rooms_per_side}x{rooms_per_side} rooms of {c}x{c}, "
-        f"~{_rockworld_state_estimate(board_side(rooms_per_side, c), rock_density)} states)"
-        for c in room_sides)
-    print(f"warning: rockworld {sizes} should converge, but each repetition "
-          f"determinizes every model over board^2 x 2^{MAX_VALUABLE_ROCKS} "
-          f"states, so they are much slower "
-          f"than the other games — they are {hi - lo:.0f}% of the progress bar, "
-          f"from {lo:.0f}% to {hi:.0f}%.")
-
-
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
@@ -969,26 +907,35 @@ def main(argv=None):
               + ("  (one room, no walls: the open board)" if r == 1
                  else f"  ({2 * r * (r - 1)} one-way doors per board)"))
 
-    _warn_slow_rockworld(jobs, args.num_simu, args.rock_density, args.rooms_per_side)
-
     time_rows, query_rows = [], []
     # One tqdm tick per repetition, so the bar reflects the real work: a
     # repetition rebuilds the instance (a fresh random map for the grid games)
     # and re-runs the whole pipeline on it.
     bar = tqdm(total=len(jobs) * args.num_simu, desc="benchmark", unit="rep")
+
+    # Everything the run has to say while the bar is up goes through one of two
+    # channels, and neither writes to the terminal itself:
+    #   * transient retry counts -> the bar's postfix, via this sink.  The
+    #     postfix already redraws in place, so a 100 000-draw loop leaves no
+    #     scrollback and no second writer competes for the line;
+    #   * anything worth keeping (a skipped repetition) -> tqdm.write, which
+    #     scrolls it above the bar.
+    # `job` is rebound by the loop below and read here at call time, so the label
+    # of the running configuration is never lost behind a status message.
+    job = ""
+
+    def show_status(text=None):
+        bar.set_postfix_str(job if text is None else f"{job} | {text}")
+
+    set_status_sink(show_status)
+
     for job_idx, (game, room_side, num_humans) in enumerate(jobs):
         # The board, not the room side: it is what the reader of a progress bar
         # wants, and what every other size in the output refers to.
         board = None if room_side is None else board_side(args.rooms_per_side, room_side)
         label = game if board is None else f"{game} {board}x{board}"
-        # Retry status lands in the bar's own postfix, which already redraws in
-        # place: a 100 000-draw loop then costs no scrollback and no second writer
-        # competes with the bar for the line.  The job label stays as the prefix,
-        # so the bar never stops saying which configuration it is running.
-        postfix = f"{label}, {num_humans} humans"
-        bar.set_postfix_str(postfix)
-        set_status_sink(lambda text, p=postfix:
-                        bar.set_postfix_str(p if text is None else f"{p} | {text}"))
+        job = f"{label}, {num_humans} humans"
+        show_status()
 
         reps, counts_per_rep, successes = [], [], []
         for rep in range(args.num_simu):
@@ -1054,7 +1001,6 @@ def main(argv=None):
             counts_per_rep.append(counts)
             successes.append(success)
             bar.update(1)
-        set_status_sink(None)
 
         # room_side = what --room-sides asked for; board_side = what it built.
         # Overcooked has neither, so both stay blank for it.
@@ -1066,6 +1012,7 @@ def main(argv=None):
         query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes,
                                              conditions))
     bar.close()
+    set_status_sink(None)          # the bar is gone; status goes back to stdout
 
     times_path   = os.path.join(args.out_dir, "compute_times.csv")
     queries_path = os.path.join(args.out_dir, "query_counts.csv")

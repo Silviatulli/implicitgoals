@@ -10,54 +10,65 @@ RockWorld is a GridWorld with valuable rocks (map value ``1``) and dangerous
 rocks (``2``). Rocks do **not** block movement — they only change the *reward*
 and what the agent has collected.
 
-A state is ``[position, collected]``: one bit per valuable rock, so that "each
-rock pays once" is Markov.  That multiplies the state count by
-``2 ** len(valuable_positions)``, which is why the number of valuable rocks is
-capped at ``MAX_VALUABLE_ROCKS``.  Reaching the goal collapses every collection
-set into the single canonical sink ``[goal_pos, (0,)*k]``, so the pipeline still
-has exactly one goal state.
+A state is ``[position, collected]``, where ``collected`` is a single **boolean**
+— "have I picked up a valuable rock yet?".  So the state space is exactly
+``2 * board^2`` however many rocks the board carries, and ``rock_density`` is
+free to generate the map without a cap on the rock count.
 
-Rewards are additive cost-to-go: ``−1`` per step everywhere except the goal
-(which pays ``0`` and is absorbing), ``+10`` the first time a valuable rock is
-entered, ``−5`` for a dangerous one.
+The task is *collect, then deliver*.  The goal absorbs only while carrying:
+``[goal, True]`` is the one goal state, and ``[goal, False]`` is an ordinary
+passable cell you may walk across before collecting anything.  That is the same
+shape as TaxiWorld, whose sink is the ``delivered`` flag and not the destination
+cell — and it means a solvable layout needs two legs, start -> some valuable
+rock -> goal.
+
+Note that "collect at least one rock" is a **disjunctive** requirement: with
+several reachable rocks no individual rock lies on every path, so no rock is a
+bottleneck on its own.  What the dominator analysis can see is whatever is
+shared on the way to them — a door every route to the rocks must cross.
+
+Rewards are cost-to-go: ``−1`` per step, ``−5`` more for a dangerous rock, and
+``+10`` on first collection.  **The reward is known broken** — one boolean
+cannot say which rocks were taken, so only the first pays — and is tracked in
+todo.md.  Nothing in the benchmark reads it: bottlenecks come from reachability,
+not from reward.
 
 Quick start
 -----------
     from rockworld import generate_determinized_models
-    out = generate_determinized_models(room_side=4, num_humans=3,
-                                       obstacle_density=0.1, rock_density=0.3,
+    out = generate_determinized_models(rooms_per_side=3, room_side=3,
+                                       num_humans=3, obstacle_density=0.1,
                                        seed=0)
+
+The board has to be large enough for `rock_density` to yield at least one
+*valuable* rock, or the goal can never absorb and RockWorld raises.  At the
+default densities that means roughly 30 cells or more.
     T_R, s0, g = out["robot"][:3]
     print(out["total_determinizing_time"])
 """
 
 import time
 import random
-from itertools import product
 
 import numpy as np
 
 from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
-                            DEFAULT_MAX_TRIES)
+                            seeded_rng, DEFAULT_MAX_TRIES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RockWorld
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Collected rocks live in the state, so each valuable rock *doubles* the state
-# space.  The cap is what keeps that exponential survivable: on the benchmark's
-# default 25x25 board at rock_density 0.3 the ratio would ask for 74 valuable
-# rocks — 2^74 times the positions — where the cap holds it to 2^3 = 8x, giving
-# the ~5k states rockworld actually runs with.  Any rock past the cap is placed
-# as a dangerous one instead, so the board still carries the requested number of
-# rocks; only how many of them can be collected is limited.
-MAX_VALUABLE_ROCKS = 3
-
 # Share of the rocks that are valuable; the rest are dangerous.  A module
-# constant rather than only a default argument because the instance-level
-# sampler and the per-grid fallback must agree on the split, or the two paths
-# would put different numbers of rocks on the same board.
+# constant rather than only a default argument so the instance-level sampler and
+# a standalone grid agree on the split.
+#
+# There is no cap on how many rocks a board may carry.  There used to have to be
+# one: `collected` was a bit per valuable rock, so every rock doubled the state
+# space and rock_density could not be honoured.  `collected` is now a single
+# boolean — "have I picked anything up yet" — so the state space is 2 x board^2
+# whatever the density, and rock_density alone decides the map.
 VALUABLE_ROCK_RATIO = 0.4
 
 
@@ -74,28 +85,49 @@ class RockWorld(GridWorld):
     """
 
     def __init__(self, start=None, goal=None, obstacle_density=0.1,
-                 rock_density=0.3, valuable_rock_ratio=VALUABLE_ROCK_RATIO,
+                 rock_density=0.1, valuable_rock_ratio=VALUABLE_ROCK_RATIO,
                  valuable_rock_reward=10, dangerous_rock_penalty=-5,
                  slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
-                 max_valuable_rocks=MAX_VALUABLE_ROCKS,
                  rooms_per_side=1, room_side=5,
                  valuable_positions=None, dangerous_positions=None):
         self.rock_density = rock_density
         self.valuable_rock_ratio = valuable_rock_ratio
         self.valuable_rock_reward = valuable_rock_reward
         self.dangerous_rock_penalty = dangerous_rock_penalty
-        self.max_valuable_rocks = max_valuable_rocks
-        # Set *before* super().__init__() so protected_cells() can see them while
-        # the obstacles are being drawn.  Shared rocks are the whole point: bit i
-        # of a state's `collected` tuple names valuable_positions[i], so unless
-        # every model of an instance lists the same cells in the same order, the
-        # same state ID means a different rock in each model and the bottleneck
-        # sets the pipeline unions are not comparable.  Same rule as the start,
-        # the goal, the doors and TaxiWorld's passenger: only obstacles vary.
+
+        # The rocks have to exist *before* super().__init__() runs, for two
+        # reasons: protected_cells() keeps obstacles off them while the layout is
+        # drawn, and check_for_path() — which decides whether a layout is
+        # accepted — now has to reach a valuable rock before the goal.
+        #
+        # Shared positions come from the caller (generate_determinized_models
+        # draws one layout for the whole instance, so the robot and every human
+        # agree on where the rocks are).  A standalone grid draws its own here,
+        # through the same sampler, so there is one code path and not two.
+        if valuable_positions is None and dangerous_positions is None:
+            obstacle_seed, self.rng = seeded_rng(obstacle_seed)
+            valuable_positions, dangerous_positions = sample_rock_layout(
+                board_side(rooms_per_side, room_side), rock_density,
+                random.Random(obstacle_seed),
+                valuable_rock_ratio=valuable_rock_ratio,
+                protected=(start, goal) if start and goal else ())
         self.valuable_positions = list(valuable_positions or [])
         self.dangerous_positions = list(dangerous_positions or [])
-        self._shared_rocks = bool(valuable_positions or dangerous_positions)
+        # Membership is asked once per transition, so keep it a set.
+        self._valuable_set = set(self.valuable_positions)
+
+        if not self._valuable_set:
+            # Without one collectable rock the goal can never absorb, so the
+            # layout search would run its full budget and then raise.  Say why
+            # here instead, where the cause is visible.
+            raise ValueError(
+                f"rock_density {rock_density} with valuable_rock_ratio "
+                f"{valuable_rock_ratio} puts no valuable rock on a "
+                f"{board_side(rooms_per_side, room_side)}x"
+                f"{board_side(rooms_per_side, room_side)} board, and the goal "
+                f"only absorbs once one has been collected — so no layout can "
+                f"ever be solvable.  Raise rock_density.")
 
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
@@ -104,22 +136,10 @@ class RockWorld(GridWorld):
                          rooms_per_side=rooms_per_side,
                          room_side=room_side)
 
-        if self._shared_rocks:
-            # Obstacles avoided these cells, so painting them now cannot bury
-            # one, and every model of the instance paints the same cells.
-            self.paint_rocks()
-        else:
-            # Standalone use with no shared layout — a bare `python
-            # rockworld.py`, or any caller passing no positions.  This grid then
-            # draws its own rocks on whatever the obstacles left free, which is
-            # fine in isolation but would break the shared-bit-order invariant
-            # above if two models of one instance ever did it independently.
-            self.place_rocks()
+        # Obstacles avoided these cells, so painting cannot bury a rock, and
+        # every model of an instance paints the same ones.
+        self.paint_rocks()
         self.reward_func = self.rock_reward_func
-        # GridWorld.__init__ built the state space before the rocks existed, so
-        # it has no collected bits yet.  Now that they are placed, rebuild it.
-        self.state_space = None
-        self.create_state_space()
 
     def protected_cells(self):
         """Keep obstacles off every rock, as well as the start and the goal.
@@ -144,103 +164,115 @@ class RockWorld(GridWorld):
 
     # ── State space ──────────────────────────────────────────────────────────
     def create_state_space(self):
-        """``[position, collected]`` for every cell and every collection subset.
+        """``[position, collected]`` for every cell, with ``collected`` a bool.
 
-        The goal collapses: whatever you have picked up, entering the goal lands
-        in the single canonical sink ``[goal_pos, (0,)*k]``.  That keeps one
-        unambiguous goal state for the pipeline (which needs exactly one) while
-        leaving collection optional and purely reward-driven.
+        ``collected`` answers one question — "have I picked up a valuable rock
+        yet?" — so the state space is exactly ``2 * board^2``, whatever the rock
+        density.  It does not grow with the number of rocks, which is why there
+        is no cap on how many a board may carry.
+
+        Nothing collapses here.  ``[goal, False]`` is an ordinary passable cell:
+        you may walk over the goal before collecting anything and carry on.
+        ``[goal, True]`` is the single absorbing state, and the only one the
+        pipeline calls the goal — see get_goal_states and is_absorbing_state.
         """
-        k = len(getattr(self, "valuable_positions", []))
-        self.state_space = []
-        for i in range(self.board_side):
-            for j in range(self.board_side):
-                if (i, j) == self.goal_pos:
-                    self.state_space.append([(i, j), (0,) * k])
-                else:
-                    for collected in product((0, 1), repeat=k):
-                        self.state_space.append([(i, j), collected])
+        self.state_space = [[(i, j), collected]
+                            for i in range(self.board_side)
+                            for j in range(self.board_side)
+                            for collected in (False, True)]
 
     def _next_collected(self, collected, next_pos):
-        """The collection set after stepping onto ``next_pos`` — the only way it
-        ever changes, and it only ever gains bits."""
-        if next_pos == self.goal_pos:
-            return (0,) * len(self.valuable_positions)      # canonical sink
-        updated = list(collected)
-        for i, pos in enumerate(self.valuable_positions):
-            if pos == next_pos:
-                updated[i] = 1
-        return tuple(updated)
+        """The flag after stepping onto ``next_pos``.
 
-    # ── Rocks ────────────────────────────────────────────────────────────────
-    def place_rocks(self):
-        total_rocks = int(self.board_side * self.board_side * self.rock_density)
-        valuable_rocks = min(int(total_rocks * self.valuable_rock_ratio),
-                             self.max_valuable_rocks)
-        dangerous_rocks = total_rocks - valuable_rocks
-        self.valuable_positions = []
-        for _ in range(valuable_rocks):
-            pos = self.place_rock(1)
-            if pos is not None:
-                self.valuable_positions.append(pos)
-        for _ in range(dangerous_rocks):
-            self.place_rock(2)
-
-    def place_rock(self, rock_type):
-        """Drop a rock on a free cell, or return None when the board is full.
-
-        Everything in ``protected_cells()`` is excluded — start and goal, plus
-        whatever a subclass adds: a rock on the goal could never be collected,
-        since entering the goal collapses the collection set.  Drawing from the
-        free list, rather than retrying until a free cell turns up, is what makes
-        a full board return None instead of looping for ever.
+        Monotone and never reset: once a valuable rock has been entered the flag
+        stays True for the rest of the episode, including at the goal.  That is
+        what makes "reach the goal *having collected something*" a property of
+        the state rather than of the history.
         """
-        protected = self.protected_cells()
-        free = [(x, y) for x in range(self.board_side) for y in range(self.board_side)
-                if self.map[x, y] == 0 and (x, y) not in protected]
-        if not free:
-            return None
-        x, y = free[self.rng.randint(len(free))]
-        self.map[x, y] = rock_type
-        return (x, y)
+        return bool(collected) or next_pos in self._valuable_set
 
     # ── Dynamics and reward ──────────────────────────────────────────────────
+    def is_absorbing_state(self, state):
+        """The sink is *the goal while carrying*, not the goal cell.
+
+        Overriding this is what keeps the goal passable until a rock has been
+        collected: ``[goal, False]`` behaves like any other cell, and only
+        ``[goal, True]`` self-loops.  Same shape as TaxiWorld, whose sink is the
+        ``delivered`` flag rather than the destination cell.
+        """
+        return self.check_goal_reached(state[0]) and bool(state[1])
+
+    def check_for_path(self):
+        """Is the *goal state* reachable — that is, goal reached while carrying?
+
+        GridWorld walks to the goal cell, which was enough while arriving there
+        ended the episode.  It no longer does: the taxi problem's shape now
+        applies here too, and the trajectory needs two legs, start -> some
+        valuable rock -> goal.  Both are real questions on a room-grid board,
+        where a one-way door can let the agent reach a rock and then strand it.
+
+        "Some" rock, not "every": collecting is disjunctive, so a layout is
+        solvable as soon as *one* valuable rock can be picked up and the goal
+        reached afterwards.
+
+        Runs from inside ``GridWorld.__init__``, which is why the rocks are
+        sampled before that call.
+        """
+        if self.start_pos is None or self.goal_pos is None:
+            return False
+        from_start = self._reachable_positions(self.start_pos)
+        return any(self.goal_pos in self._reachable_positions(rock)
+                   for rock in self.valuable_positions if rock in from_start)
+
     def get_transition_probability(self, state, action, state_prime):
-        """Position moves exactly as in a plain grid; the collection set is a
+        """Position moves exactly as in a plain grid; the collection flag is a
         deterministic function of where you land, so any inconsistent successor
         has probability 0."""
-        if tuple(state_prime[1]) != self._next_collected(tuple(state[1]),
-                                                         state_prime[0]):
+        if bool(state_prime[1]) != self._next_collected(state[1],
+                                                        state_prime[0]):
             return 0
         return super().get_transition_probability(state, action, state_prime)
 
     def rock_reward_func(self, state, action, next_state):
-        """Cost-to-go: −1 per step everywhere except the goal, which pays 0.
+        """Cost-to-go: −1 per step, −5 more for entering a dangerous rock, and
+        +10 the *first* time a valuable rock is collected.
 
-        Rewards are additive, so stepping onto a fresh valuable rock nets
-        −1 + 10 = +9 and onto a dangerous one −1 − 5 = −6.  The valuable bonus is
-        paid only when the rock's bit actually flips 0→1, so revisiting a
-        collected rock is just another −1 — enforced by the state, not by
-        mutating the map.  There is no bonus for arriving at the goal: a reward
-        paid at an absorbing state cannot change the policy and would only break
-        V(goal) = 0.
+        KNOWN BROKEN, deliberately, and tracked in todo.md.  "Each valuable rock
+        pays once" is no longer expressible: `collected` is one boolean, so the
+        state cannot say *which* rocks have been taken, only that something has.
+        The bonus is therefore paid on the single False→True flip and every
+        later rock is worth nothing.  Any value function built on this reward is
+        wrong.
+
+        Left running rather than deleted because nothing in the benchmark reads
+        it — bottlenecks come from reachability, not reward — so this is a
+        placeholder to be redesigned alongside the value function, not a live
+        defect.  Making each rock pay again means putting the identity of the
+        collected rocks back into the state, which is exactly the 2^k blow-up
+        the boolean flag was introduced to remove.
         """
-        if self.check_goal_reached(state[0]):
+        if self.is_absorbing_state(state):
             return 0                                    # the sink pays nothing
         reward = -1
         next_pos = next_state[0]
-        for i, pos in enumerate(self.valuable_positions):
-            if pos == next_pos and not state[1][i] and next_state[1][i]:
-                reward += self.valuable_rock_reward
+        if not state[1] and next_state[1]:              # the one False->True flip
+            reward += self.valuable_rock_reward
         if self.map[next_pos] == 2:
             reward += self.dangerous_rock_penalty
         return reward
 
     def get_init_state(self):
-        return [self.start_pos, (0,) * len(self.valuable_positions)]
+        return [self.start_pos, False]
 
     def get_goal_states(self):
-        return [[self.goal_pos, (0,) * len(self.valuable_positions)]]
+        """The one goal state: on the goal cell, carrying.
+
+        Exactly one, which the pipeline requires — extract_bottlenecks walks the
+        dominator tree from a single goal and augment_mdp_to_deterministic takes
+        get_goal_states()[0].  ``[goal, False]`` is deliberately not here: it is
+        a cell you can stand on, not the end of the task.
+        """
+        return [[self.goal_pos, True]]
 
     CHAR_STYLE = {**GridWorld.CHAR_STYLE,
                    "V": ("#fdd835", "#4e342e"),      # valuable rock: worth +10
@@ -257,20 +289,23 @@ class RockWorld(GridWorld):
 
 def sample_rock_layout(board, rock_density, rng,
                        valuable_rock_ratio=VALUABLE_ROCK_RATIO,
-                       max_valuable_rocks=MAX_VALUABLE_ROCKS,
                        protected=()):
-    """One rock layout for a whole instance: (valuable_positions, dangerous).
+    """One rock layout: (valuable_positions, dangerous_positions).
 
-    Drawn once in generate_determinized_models and handed to every model, so the
-    robot and the humans agree on which rock bit i of `collected` refers to.
-    Counts mirror RockWorld.place_rocks exactly, so sharing does not change how
-    many rocks a board carries — only that they land in the same places.
+    ``rock_density`` decides the count outright — ``board^2 * rock_density``
+    rocks, a ``valuable_rock_ratio`` share of them valuable.  Nothing is capped,
+    because the state space no longer grows with the rock count.
 
-    `rng` is a module-level ``random`` (not a grid's own RandomState): the layout
-    belongs to the instance, not to any one model.
+    Called twice over: once per instance in generate_determinized_models, whose
+    result is handed to every model so the robot and the humans see the same
+    rocks; and once inside RockWorld.__init__ for a standalone grid that was
+    given no layout.  One sampler, so the two cannot drift apart.
+
+    `rng` is a ``random.Random`` — the layout belongs to the instance, not to any
+    one model's numpy stream.
     """
     total_rocks = int(board * board * rock_density)
-    n_valuable = min(int(total_rocks * valuable_rock_ratio), max_valuable_rocks)
+    n_valuable = int(total_rocks * valuable_rock_ratio)
     free = [(i, j) for i in range(board) for j in range(board)
             if (i, j) not in set(protected)]
     picked = rng.sample(free, min(total_rocks, len(free)))
@@ -329,7 +364,7 @@ def _make_determinized(obstacle_density, rock_density, model_type, visualize=Fal
 
 
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
-                                 rock_density=0.3, seed=None, verbose=True,
+                                 rock_density=0.1, seed=None, verbose=True,
                                  visualize=False, rooms_per_side=1, room_side=4,
                                  slip_prob=0.0):
     """Build a robot model + ``num_humans`` human RockWorld models and determinize each.
@@ -358,10 +393,10 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
         np.random.seed(seed)
 
     # One rock layout for the whole instance, as with the start, the goal, the
-    # doors and TaxiWorld's passenger.  Drawing it per model made bit i of
-    # `collected` name a different cell in every model, so a bottleneck state ID
-    # meant something different in T_R than in each T_H and the union the
-    # pipeline takes over them was comparing unrelated labels.
+    # doors and TaxiWorld's passenger; only the obstacles vary between models.
+    # Drawing it per model would give each human a different set of collectable
+    # cells, so "reach the goal carrying" would mean a different task in each
+    # one and the bottleneck sets the pipeline unions would not be comparable.
     size = board_side(rooms_per_side, room_side)
     valuable_positions, dangerous_positions = sample_rock_layout(
         size, rock_density, random, protected=((0, 0), (size - 1, size - 1)))
@@ -403,8 +438,8 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
 
 
 if __name__ == "__main__":
-    out = generate_determinized_models(room_side=4, num_humans=3,
-                                       obstacle_density=0.1, rock_density=0.3, seed=0, visualize=True)
+    out = generate_determinized_models(rooms_per_side=3, room_side=3, num_humans=3,
+                                       obstacle_density=0.1, seed=0, visualize=True)
     T_R, s0, g, _ = out["robot"]
     print("\nRobot determinized transition array shape:", T_R.shape)
     print("start index:", s0, " goal index:", g)
