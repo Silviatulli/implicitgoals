@@ -437,9 +437,130 @@ def check_sequential_achievability(mask, from_start, predecessors, memo):
     return ends != 0
 
 
-def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state, goal_state, verbose=True):
+def _comparability_graph(possible_bottlenecks, T_R, start_state):
+    """(live, adj) for the comparability graph on the bottlenecks.
+
+    live   bitmask of the bottlenecks the start can reach; the rest are in no
+           achievable subset at all.
+    adj[i] bitmask of the live bottlenecks comparable with i — i reaches j, or j
+           reaches i.  Comparability, not reachability: the visiting order is
+           free to take either of them first.
     """
-    Algorithm 1 — find all maximally achievable subsets of bottlenecks.
+    n = len(possible_bottlenecks)
+    from_start, predecessors = _build_adjacency(possible_bottlenecks, T_R, start_state)
+    live = sum(1 << i for i in range(n) if from_start[i])
+    adj = [0] * n
+    for i in range(n):
+        if not (live >> i) & 1:
+            continue
+        for j in range(i + 1, n):
+            if (live >> j) & 1 and ((predecessors[j] >> i & 1)
+                                    or (predecessors[i] >> j & 1)):
+                adj[i] |= 1 << j
+                adj[j] |= 1 << i
+    return live, adj
+
+
+def _maximal_cliques(live, adj, n):
+    """Bron–Kerbosch with pivoting: every maximal clique, as a bitmask.
+
+    The pivot is the vertex of P | X with the most neighbours in P, which is what
+    keeps the recursion from re-deriving a clique once per member.
+    """
+    cliques = []
+
+    def expand(R, P, X):
+        if not P and not X:
+            cliques.append(R)
+            return
+        PX = P | X
+        pivot = max((v for v in range(n) if (PX >> v) & 1),
+                    key=lambda v: (P & adj[v]).bit_count())
+        cand = P & ~adj[pivot]
+        while cand:
+            low = cand & -cand
+            v = low.bit_length() - 1
+            expand(R | low, P & adj[v], X & adj[v])
+            P &= ~low
+            X |= low
+            cand ^= low
+
+    expand(0, live, 0)
+    return cliques
+
+
+def find_maximally_achievable_subsets(possible_bottlenecks, T_R, start_state,
+                                      goal_state, verbose=True):
+    """
+    Algorithm 1 — every maximally achievable subset of bottlenecks.
+
+    Same output as the paper's include/exclude DFS
+    (find_maximally_achievable_subsets_dfs), reached without enumerating subsets.
+
+    A subset is achievable iff some order visits all of it, travelling freely in
+    between.  Because that travel is free, the relation the order has to respect
+    is plain graph reachability, which is *transitive* — so an order exists iff
+    every pair in the subset is comparable (one of the two reaches the other):
+
+      * order exists => comparable.  Chain the hops, s_i ⇝ … ⇝ s_j, and compose.
+        This direction is where transitivity is needed.
+      * comparable => order exists.  Quotient by mutual reachability (the SCCs),
+        topologically sort, list each SCC's members in any order.
+
+    Achievability is therefore a property of pairs, the achievable subsets are the
+    cliques of the comparability graph, and the maximal ones are its maximal
+    cliques — enumerated directly, so nothing has to be filtered afterwards.
+
+    The goal folds in as an ordinary vertex: a subset can still reach the goal iff
+    it is comparable with it, and the goal absorbs, so it is the maximum of every
+    clique it belongs to.  Keeping the cliques that contain it is exactly the
+    DFS's `completable` test.
+
+    Parameters
+    ----------
+    possible_bottlenecks : list[int]   bottleneck state IDs (B_nofilter or B)
+    T_R                  : ndarray     clean transition matrix
+    start_state          : int
+    goal_state           : int or None
+        When present in `possible_bottlenecks`, the returned subsets are those
+        containing it, and the universal-bottleneck invariant is asserted.
+
+    Returns
+    -------
+    I : list[list[int]]   maximally achievable subsets (each is a list of state IDs)
+    """
+    n = len(possible_bottlenecks)
+    if verbose:
+        print(f"Building the comparability graph for {n} bottlenecks...")
+    live, adj = _comparability_graph(possible_bottlenecks, T_R, start_state)
+
+    masks = _maximal_cliques(live, adj, n)
+    if verbose:
+        print(f"{len(masks)} maximal cliques.")
+
+    goal_bit = (possible_bottlenecks.index(goal_state)
+                if goal_state in possible_bottlenecks else None)
+    if goal_bit is not None:
+        # A clique without the goal is a subset no trajectory can finish from —
+        # the DFS discarded those at its leaves.
+        masks = [m for m in masks if (m >> goal_bit) & 1]
+
+    I = [[possible_bottlenecks[i] for i in range(n) if (m >> i) & 1] for m in masks]
+
+    if goal_state in set(possible_bottlenecks):
+        assert all(goal_state in subset for subset in I), (
+            "Universal-bottleneck invariant violated: the goal state is absent from "
+            "at least one maximal achievable subset.  Every trajectory through a "
+            "matrix that can reach the goal must end there."
+        )
+    return I
+
+
+def find_maximally_achievable_subsets_dfs(possible_bottlenecks, T_R, start_state, goal_state, verbose=True):
+    """
+    Algorithm 1, the paper's include/exclude DFS — kept as the reference oracle
+    that find_maximally_achievable_subsets is tested against.  Same output, 2^|B|
+    cost; unusable past |B| ~ 30.
 
     Parameters
     ----------
