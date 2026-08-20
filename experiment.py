@@ -477,7 +477,11 @@ MAX_INSTANCE_TRIES = 100_000
 # stride is larger than any (job_idx * num_simu + rep) a run can produce, so a
 # redraw can never land on another repetition's seed and collapse two
 # repetitions onto one map, which is the whole reason they are seeded apart.
-RETRY_SEED_STRIDE = 1_000_003
+# It is also small enough that the last draw's seed still fits in the 32 bits
+# numpy allows, which is what the assertion below pins.
+RETRY_SEED_STRIDE = 40_009
+assert RETRY_SEED_STRIDE * MAX_INSTANCE_TRIES < 2 ** 32, \
+    "stride x tries must fit in 32 bits: numpy seeds are bounded"
 
 
 def draw_instance_under_cap(game, room_side, num_humans, seed, args,
