@@ -954,13 +954,25 @@ def draw_phase(game, room_side, num_humans, seeds, args, pool, bar, postfix):
 STAGE_SIZES = ["n_states", "n_reachable", "n_actions", "n_humans", "n_draws",
                "n_B_nofilter", "n_B", "n_I", "n_columns"]
 
+# What identifies a configuration.  Every aggregate is a mean over the
+# repetitions sharing these, so they are also the group key when the per-episode
+# file is read back.
+CONFIG_KEYS = ["game", "room_side", "rooms_per_side", "board_side",
+               "num_humans", "num_simu"]
+
 
 def column_layout(use_h2):
     """The CSV header of a run, derived from the conditions it will produce.
 
-    Returns (conditions, stage_times, time_fields, query_fields).  Keeping the
-    four in one place is what keeps the H2-off run from writing empty `*_h2`
-    columns nothing filled in.
+    Returns (conditions, stage_times, episode_fields, time_fields, query_fields).
+    Keeping them in one place is what keeps the H2-off run from writing empty
+    `*_h2` columns nothing filled in.
+
+    `episode_fields` is the header of the one file a run actually writes: one row
+    per repetition, carrying every size, every stage time and every condition's
+    query count.  `time_fields` and `query_fields` describe the two *aggregate*
+    views, which are means over the repetitions and are derived from that file
+    rather than accumulated alongside it — see aggregate_episodes().
 
     n_success + n_failure == n_episodes.  An episode "fails" when the drawn human
     is not representable in I, in which case its query count measures queries
@@ -990,7 +1002,13 @@ def column_layout(use_h2):
                     + [f"{c}_{stat}" for c in conditions
                        for stat in ("mean", "std", "mean_success", "mean_failure")]
                     + ["saved_queries", "skipped"])
-    return conditions, stage_times, time_fields, query_fields
+
+    # One row per repetition: the raw record everything else is derived from.
+    # `rep` and `seed` identify it; `success` and the per-condition query counts
+    # are what the aggregate query view averages.
+    episode_fields = (CONFIG_KEYS + ["rep", "seed"] + STAGE_SIZES + stage_times
+                      + ["success"] + list(conditions) + ["skipped"])
+    return conditions, stage_times, episode_fields, time_fields, query_fields
 
 
 def parse_args(argv=None):
@@ -1108,7 +1126,8 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
-    conditions, stage_times, time_fields, query_fields = column_layout(args.h2)
+    (conditions, stage_times, episode_fields,
+     time_fields, query_fields) = column_layout(args.h2)
 
     # Overcooked has no grid size, so it gets one job per human count; the four
     # grid domains get the full (room side x humans) cross product.
@@ -1136,7 +1155,16 @@ def main(argv=None):
     # that cost should be paid once, not once per configuration.
     pool = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
 
-    time_rows, query_rows = [], []
+    # The run's only output: one row per repetition, written as each finishes.
+    # Everything reported later is a mean over these rows, computed on read.
+    # Writing during the sweep rather than at the end is deliberate — a run that
+    # dies in its fifth hour still leaves every repetition it completed.
+    episodes_path = os.path.join(args.out_dir, "episodes.csv")
+    episodes_file = open(episodes_path, "w", newline="")
+    episodes = csv.DictWriter(episodes_file, fieldnames=episode_fields,
+                              extrasaction="ignore")
+    episodes.writeheader()
+
     # One tqdm tick per repetition, so the bar reflects the real work: a
     # repetition rebuilds the instance (a fresh random map for the grid games)
     # and re-runs the whole pipeline on it.
@@ -1180,7 +1208,6 @@ def main(argv=None):
         # Sequential on purpose: the exact Query MDP allocates 3^|B| knowledge
         # states, so this is the memory-bound half and running it wide would
         # exhaust RAM long before it exhausted cores.
-        reps, counts_per_rep, successes = [], [], []
         for rep, seed in enumerate(seeds):
             (instance, bundle, t_build, t_rejected,
              n_draws, t_accepted, note) = drawn[rep]
@@ -1219,38 +1246,87 @@ def main(argv=None):
             row["t_total"]    = (float("nan") if instance is None
                                  else t_accepted + time.perf_counter() - t_phase2)
 
-            reps.append(row)
-            counts_per_rep.append(counts)
-            successes.append(success)
+            episodes.writerow({**key_of(game, room_side, board, num_humans,
+                                          args),
+                               "rep": rep, "seed": seed, "success": success,
+                               **row, **counts})
             bar.update(1)
 
-        # room_side = what --room-sides asked for; board_side = what it built.
-        # Overcooked has neither, so both stay blank for it.
-        key = {"game": game, "room_side": "" if room_side is None else room_side,
-               "rooms_per_side": "" if room_side is None else args.rooms_per_side,
-               "board_side": "" if board is None else board,
-               "num_humans": num_humans, "num_simu": args.num_simu}
-        time_rows.append(_aggregate_times(key, reps, stage_times))
-        query_rows.append(_aggregate_queries(key, reps, counts_per_rep, successes,
-                                             conditions))
+        episodes_file.flush()      # one configuration's worth is now safe on disk
     bar.close()
     set_status_sink(None)          # the bar is gone; status goes back to stdout
     if pool is not None:
         pool.shutdown()
+    episodes_file.close()
 
-    times_path   = os.path.join(args.out_dir, "compute_times.csv")
-    queries_path = os.path.join(args.out_dir, "query_counts.csv")
-    _write_csv(times_path, time_fields, time_rows)
-    _write_csv(queries_path, query_fields, query_rows)
-    query_plot_path, times_plot_path = _make_plots(times_path, queries_path,
+    # Everything below is a *view* of episodes.csv, recomputed from it rather
+    # than carried alongside it.
+    time_rows, query_rows = aggregate_episodes(episodes_path, conditions,
+                                               stage_times, time_fields,
+                                               query_fields)
+    query_plot_path, times_plot_path = _make_plots(time_rows, query_rows,
                                                    args.out_dir, conditions)
+    tables_path = write_tables(episodes_path, query_rows, time_rows,
+                               args.out_dir, conditions)
 
     print(f"\n{len(time_rows)} configurations x {args.num_simu} repetitions")
-    print(f"  mean stage times   -> {times_path}")
-    print(f"  mean query counts  -> {queries_path}")
-    print(f"  query counts plot  -> {query_plot_path}")
-    print(f"  compute times plot -> {times_plot_path}")
+    print(f"  per-episode results -> {episodes_path}")
+    print(f"  summary tables      -> {tables_path}")
+    print(f"  query counts plot   -> {query_plot_path}")
+    print(f"  compute times plot  -> {times_plot_path}")
     _print_summary(time_rows, query_rows, conditions)
+
+
+def key_of(game, room_side, board, num_humans, args):
+    """The configuration a repetition belongs to, as CSV columns.
+
+    room_side is what --room-sides asked for, board_side what it built, and
+    neither can be recovered from the other without rooms_per_side, so all three
+    are written.  Overcooked has no geometry at all and leaves them blank.
+    """
+    return {"game": game,
+            "room_side": "" if room_side is None else room_side,
+            "rooms_per_side": "" if room_side is None else args.rooms_per_side,
+            "board_side": "" if board is None else board,
+            "num_humans": num_humans, "num_simu": args.num_simu}
+
+
+def aggregate_episodes(episodes_path, conditions, stage_times,
+                       time_fields, query_fields):
+    """Rebuild the two aggregate views from the per-episode file.
+
+    The run writes exactly one file — one row per repetition — and everything
+    reported is a mean over the repetitions of a configuration, computed here.
+    Nothing is accumulated during the sweep, so the file on disk is the only
+    source of truth and a run that dies half way still leaves usable data.
+
+    Returns (time_rows, query_rows): lists of dicts with the columns
+    `time_fields` and `query_fields` describe.
+    """
+    df = pd.read_csv(episodes_path)
+    # Overcooked leaves the geometry columns empty, which pandas reads as NaN;
+    # a NaN key would silently drop those groups.
+    for k in CONFIG_KEYS:
+        if df[k].isna().any():
+            df[k] = df[k].fillna("")
+    df["skipped"] = df["skipped"].fillna("")
+
+    time_rows, query_rows = [], []
+    # sort=False keeps the configurations in the order the sweep ran them.
+    for key_vals, sub in df.groupby(CONFIG_KEYS, sort=False, dropna=False):
+        # The geometry columns come back as floats, because Overcooked leaves
+        # them blank and that makes pandas type the whole column float.  Put the
+        # integers back so the aggregate reads exactly as it did when it was
+        # accumulated in memory: "9", not "9.0".
+        key = {k: (int(v) if isinstance(v, float) and v == int(v) else v)
+               for k, v in zip(CONFIG_KEYS, key_vals)}
+        reps = sub.to_dict("records")
+        counts_per_rep = [{c: r[c] for c in conditions} for r in reps]
+        successes = [r["success"] for r in reps]
+        time_rows.append(_aggregate_times(key, reps, stage_times))
+        query_rows.append(_aggregate_queries(key, reps, counts_per_rep,
+                                             successes, conditions))
+    return time_rows, query_rows
 
 
 def _nanmean(values):
@@ -1347,9 +1423,9 @@ def _rotate_xticks(ax, labels, x):
     ax.set_xticklabels(labels, fontsize=8, rotation=45, ha="right")
 
 
-def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
-    """Read compute_times.csv / query_counts.csv back and render two PNGs
-    into out_dir: one bar per (game, size, num_humans) combination in both.
+def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
+    """Render two PNGs into out_dir from the aggregated views of episodes.csv:
+    one bar per (game, size, num_humans) combination in both.
 
     query_counts.png   one subplot per configuration — a (size, humans) pair for
                         the grid games, and one for Overcooked, which has no grid
@@ -1369,8 +1445,13 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
 
     Returns (query_plot_path, times_plot_path).
     """
-    df_q = pd.read_csv(queries_path)
-    df_t = pd.read_csv(times_path)
+    df_q = pd.DataFrame(query_rows)
+    df_t = pd.DataFrame(time_rows)
+    # The geometry columns are blank for Overcooked; make them numeric-with-NaN
+    # so the grid/Overcooked split below reads the same as it did from CSV.
+    for d in (df_q, df_t):
+        for c in ("room_side", "rooms_per_side", "board_side"):
+            d[c] = pd.to_numeric(d[c], errors="coerce")
     with_h2 = any(c.endswith("_h2") for c in conditions)
 
     # ── query_counts.png — one subplot per configuration ────────────────────
@@ -1489,6 +1570,116 @@ def _make_plots(times_path, queries_path, out_dir, conditions=CONDITIONS):
     plt.close(fig)
 
     return query_plot_path, times_plot_path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The two summary tables, written next to the plots
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _levene_rows(episodes, a="strategic_exact", b="info_gain"):
+    """Levene's test on the raw per-episode query counts, one row per domain.
+
+    Pools the human counts, so each sample is num_simu x |--humans| episodes.
+    The test needs the individual episodes, which is why it lives here and not
+    in the aggregate view: means and standard deviations are not enough to run
+    it.
+
+    Levene with the median (Brown-Forsythe) rather than an F-test, because query
+    counts are discrete and far from normal, which is exactly the case Levene is
+    robust to.
+
+    scipy is imported here rather than at module scope so a machine without it
+    still completes a sweep; the table then reports the variance ratio and
+    leaves the p-value blank.
+    """
+    try:
+        from scipy.stats import levene
+    except ImportError:
+        levene = None
+
+    rows = []
+    for game, sub in episodes.groupby("game", sort=False):
+        x = sub[a].dropna().to_numpy()
+        y = sub[b].dropna().to_numpy()
+        if len(x) < 3 or len(y) < 3:
+            continue
+        var_x, var_y = x.var(ddof=1), y.var(ddof=1)
+        p = "" if levene is None else f"{levene(x, y, center='median')[1]:.3e}"
+        rows.append([game, int(sub.n_states.iloc[0]), len(x),
+                     round(var_x, 3), round(var_y, 3),
+                     round(var_y / var_x, 2) if var_x else "", p])
+    return sorted(rows, key=lambda r: r[1])
+
+
+def write_tables(episodes_path, query_rows, time_rows, out_dir, conditions):
+    """Write results/tables.csv: the two summary tables, one above the other.
+
+    Plain CSV so it opens in a spreadsheet and reads in a terminal, with a `#`
+    line naming each table.  Both are *views* of episodes.csv and are rebuilt
+    from it every time, so they cannot drift from the data they describe.
+
+    Table 1 — mean queries per condition.  Grid domains as a range across the
+    four, Overcooked on its own, since the four grids agree closely and the
+    range is what the paper reports.  |B| and |Phi| are included because both
+    are observed rather than set: instances are redrawn until |B| <=
+    --max-bottlenecks and |Phi| >= --min-hypotheses, so every mean is
+    conditioned on that screen.
+
+    Table 2 — variance of the query count, Str.VI against Info Gain, with
+    Levene's p-value.
+    """
+    episodes = pd.read_csv(episodes_path)
+    q = pd.DataFrame(query_rows)
+    t = pd.DataFrame(time_rows)
+    m = q.merge(t[["game", "num_humans", "n_B", "n_I"]], on=["game", "num_humans"])
+    grid = m[m.game != "overcooked"]
+    over = m[m.game == "overcooked"]
+    humans = sorted(m.num_humans.unique())
+    named = [c for c in conditions]
+
+    def rng(sub, cond):
+        return f"{sub[cond + '_mean'].min():.2f}-{sub[cond + '_mean'].max():.2f}"
+
+    path = os.path.join(out_dir, "tables.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        n_simu = int(m.num_simu.iloc[0])
+        # No commas inside these header lines: one cell holding commas is
+        # re-split by anything reading the file as CSV, including `column -s,`.
+        w.writerow([f"# TABLE 1 - mean queries until the human's subgoal set is "
+                    f"identified ({n_simu} repetitions per configuration). "
+                    f"Grid rows give the range across the four grid domains. "
+                    f"|B| and |Phi| are observed rather than set."])
+        w.writerow(["Domain", "Humans", "|B|", "|Phi|"]
+                   + [CONDITION_LABELS[c] for c in named])
+        for h in humans:
+            s = grid[grid.num_humans == h]
+            if len(s):
+                w.writerow(["Grid family", h,
+                            f"{s.n_B.min():.1f}-{s.n_B.max():.1f}",
+                            f"{s.n_I.min():.1f}-{s.n_I.max():.1f}"]
+                           + [rng(s, c) for c in named])
+        for h in humans:
+            s = over[over.num_humans == h]
+            if len(s):
+                r = s.iloc[0]
+                # "n/a" rather than an empty cell: H3 ranks by distance to the
+                # goal and Overcooked has no geometry, which is a fact about the
+                # game and not a missing measurement.
+                w.writerow(["Overcooked", h, f"{r.n_B:.1f}", f"{r.n_I:.1f}"]
+                           + [("n/a" if pd.isna(r[c + "_mean"]) else
+                               f"{r[c + '_mean']:.2f} +/- {r[c + '_std']:.2f}")
+                              for c in named])
+
+        w.writerow([])
+        w.writerow(["# TABLE 2 - variance of the query count (VI baseline vs "
+                    "Info Gain) by Levene's median-centred test on the raw "
+                    "per-episode counts. Ratio > 1 means Info Gain varies more."])
+        w.writerow(["Domain", "States", "n episodes", "var (VI)",
+                    "var (Info Gain)", "ratio", "Levene p"])
+        for row in _levene_rows(episodes):
+            w.writerow(row)
+    return path
 
 
 def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
