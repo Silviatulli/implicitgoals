@@ -1,0 +1,41 @@
+inst_seed,n_B,n_I,policy,mean_queries
+0,66,24,Query All,41.37
+0,66,24,H3,26.92
+0,66,24,Rails + P(YES),23.48
+0,66,24,DQN uniform_avg + rails,15.75
+0,66,24,floor,13.67
+1,59,7,Query All,36.52
+1,59,7,H3,19.83
+1,59,7,Rails + P(YES),17.68
+1,59,7,DQN uniform_avg + rails,12.0
+1,59,7,floor,10.75
+2,72,15,Query All,59.25
+2,72,15,H3,42.08
+2,72,15,Rails + P(YES),33.08
+2,72,15,DQN uniform_avg + rails,23.75
+2,72,15,floor,20.58
+3,72,6,Query All,42.68
+3,72,6,H3,21.75
+3,72,6,Rails + P(YES),19.9
+3,72,6,DQN uniform_avg + rails,17.0
+3,72,6,floor,14.5
+4,68,6,Query All,31.58
+4,68,6,H3,15.75
+4,68,6,Rails + P(YES),12.32
+4,68,6,DQN uniform_avg + rails,11.33
+4,68,6,floor,7.5
+5,80,12,Query All,37.82
+5,80,12,H3,29.92
+5,80,12,Rails + P(YES),22.53
+5,80,12,DQN uniform_avg + rails,21.92
+5,80,12,floor,16.08
+6,88,7,Query All,48.25
+6,88,7,H3,25.75
+6,88,7,Rails + P(YES),21.52
+6,88,7,DQN uniform_avg + rails,22.58
+6,88,7,floor,15.0
+7,49,8,Query All,25.25
+7,49,8,H3,14.5
+7,49,8,Rails + P(YES),9.7
+7,49,8,DQN uniform_avg + rails,9.42
+7,49,8,floor,6.25

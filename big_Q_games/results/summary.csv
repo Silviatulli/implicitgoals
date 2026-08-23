@@ -1,0 +1,11 @@
+board,25,|B|,66,|I|,24,humans,12,n_rollouts,1600,top_k,1000,beam,10
+policy,mean_queries,std
+|B|,66.0,0.0
+Query All,41.608,22.931
+H1 Info Gain,48.083,15.914
+H3 Goal Proximity,26.917,23.379
+H4 Query Frequency,47.167,17.243
+Prioritized sweep (bound only),27.917,24.432
+Prioritized sweep (optimistic),28.833,25.942
+Prioritized sweep (pessimistic),24.083,21.034
+floor,13.667,0
