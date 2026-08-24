@@ -19,7 +19,7 @@ from experiment import draw_instance_under_cap
 from bottlenecks import (Oracle, subsets_to_array, bottleneck_index,
                          evaluate_policy_on_real_human)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rails import RailedQNet, rail_bias
+from rails import RailedQNet, rail_bias, tiers_batch
 
 _NEG = -1e9          # finite stand-in for -inf, so a fully-masked row still argmaxes
 
@@ -107,18 +107,22 @@ class TensorBuffer:
         self.act = torch.zeros((cap,), dtype=torch.long, device=device)
         self.rew = torch.zeros((cap,), device=device)
         self.done = torch.zeros((cap,), device=device)
+        # Per-transition bootstrap discount.  gamma for a primitive step; gamma**k for a
+        # semi-MDP macro-transition spanning k primitive steps.
+        self.disc = torch.zeros((cap,), device=device)
 
-    def push(self, obs, act, rew, nobs, done):
+    def push(self, obs, act, rew, nobs, done, disc):
         b = obs.shape[0]
         i = (self.ptr + torch.arange(b, device=self.device)) % self.cap
         self.obs[i], self.act[i], self.rew[i] = obs, act, rew
-        self.nobs[i], self.done[i] = nobs, done
+        self.nobs[i], self.done[i], self.disc[i] = nobs, done, disc
         self.ptr = int((self.ptr + b) % self.cap)
         self.size = min(self.size + b, self.cap)
 
     def sample(self, batch):
         i = torch.randint(0, self.size, (batch,), device=self.device)
-        return self.obs[i], self.act[i], self.rew[i], self.nobs[i], self.done[i]
+        return (self.obs[i], self.act[i], self.rew[i], self.nobs[i],
+                self.done[i], self.disc[i])
 
 
 def valid_from_obs(obs):
@@ -169,7 +173,8 @@ def train(ins, seed=0, mode="joint", railed=False, n_steps=120_000, log_every=2_
           n_envs=64, batch_size=256, hidden=256, n_layers=2, lr=3e-4, target_sync=1_000,
           buffer_cap=500_000, warmup_steps=400, eps_start=1.0, eps_end=0.05,
           eps_decay_steps=60_000, grad_clip=5.0, c_q=-10.0, p_i=1.0, p_f=0.0,
-          gamma=0.99, device=None, verbose=True, p_const=None):
+          gamma=0.99, device=None, verbose=True, p_const=None,
+          rail_explore=False, semi_mdp=False):
     """eps_decay_steps is absolute, not a fraction of n_steps: budget and
     exploration schedule have to vary independently for a length sweep to mean
     anything."""
@@ -208,35 +213,87 @@ def train(ins, seed=0, mode="joint", railed=False, n_steps=120_000, log_every=2_
                  torch.as_tensor(act_np, dtype=torch.long, device=device),
                  torch.as_tensor(rew_np, device=device),
                  torch.as_tensor(nobs_np, device=device),
-                 torch.as_tensor(done_np.astype(np.float32), device=device))
+                 torch.as_tensor(done_np.astype(np.float32), device=device),
+                 torch.full((len(act_np),), gamma, device=device))
 
-    def rand_actions(valid_np):
-        g = rng.random(valid_np.shape); g[~valid_np] = -1.0
+    def rand_actions(valid_np, t1=None, t3=None):
+        """Uniform over the legal actions, or over the RAILED ones when rail_explore.
+
+        Without this, exploration samples over all live actions and so spends ~29% of
+        early transitions on tier-3 queries that provably cannot move either terminal
+        test -- the buffer is filled with actions the deployed policy can never take.
+        """
+        pool = valid_np
+        if rail_explore and t1 is not None:
+            pool = np.where(t1.any(1, keepdims=True), t1, valid_np & ~t3)
+            pool = np.where(pool.any(1, keepdims=True), pool, valid_np)   # never empty
+        g = rng.random(pool.shape); g[~pool] = -1.0
         return g.argmax(1).astype(np.int64)
 
     for _ in range(warmup_steps):
-        push(env.obs(), rand_actions(env.valid()))
+        w1, w3 = tiers_batch(env.K_I, env.K_not, ins["I_array"])
+        push(env.obs(), rand_actions(env.valid(), w1, w3))
+
+    # Semi-MDP state: one open macro-transition per env, from the last FREE decision
+    # (no tier-1 available) through the forced tier-1 queries that follow it.
+    pend_obs = np.zeros((n_envs, 2 * n), dtype=np.float32)
+    pend_act = np.zeros(n_envs, dtype=np.int64)
+    pend_ret = np.zeros(n_envs, dtype=np.float32)
+    pend_disc = np.ones(n_envs, dtype=np.float32)
+    pend_live = np.zeros(n_envs, dtype=bool)
+
+    def push_raw(o, a, r, no, d, disc):
+        buf.push(torch.as_tensor(o, device=device),
+                 torch.as_tensor(a, dtype=torch.long, device=device),
+                 torch.as_tensor(r, device=device),
+                 torch.as_tensor(no, device=device),
+                 torch.as_tensor(d, device=device),
+                 torch.as_tensor(disc, device=device))
 
     losses, t0 = [], time.time()
     for step in range(n_steps):
         obs_np, valid_np = env.obs(), env.valid()
+        t1, t3 = tiers_batch(env.K_I, env.K_not, ins["I_array"])
+        free = ~t1.any(1)          # no tier-1 pending -> the network really chooses
         eps = eps_start + min(1.0, step / eps_decay_steps) * (eps_end - eps_start)
         if rng.random() < eps:
-            act_np = rand_actions(valid_np)
+            act_np = rand_actions(valid_np, t1, t3)
         else:
             with torch.no_grad():
                 obs_t = torch.as_tensor(obs_np, device=device)
                 qv = railed_q(q(obs_t), obs_t)
                 qv = qv.masked_fill(~torch.as_tensor(valid_np, device=device), _NEG)
                 act_np = qv.argmax(1).cpu().numpy().astype(np.int64)
-        push(obs_np, act_np)
+        if not semi_mdp:
+            push(obs_np, act_np)
+        else:
+            # arriving at a free state closes the macro-transition that led here
+            m = pend_live & free
+            if m.any():
+                push_raw(pend_obs[m], pend_act[m], pend_ret[m], obs_np[m],
+                         np.zeros(int(m.sum()), dtype=np.float32), pend_disc[m])
+                pend_live[m] = False
+            nobs_np, rew_np, done_np = env.step(act_np)
+            ext = pend_live & ~free                       # forced step: extend the macro
+            pend_ret[ext] += pend_disc[ext] * rew_np[ext]
+            pend_disc[ext] *= gamma
+            pend_obs[free] = obs_np[free]                 # free step: open a new macro
+            pend_act[free] = act_np[free]
+            pend_ret[free] = rew_np[free]
+            pend_disc[free] = gamma
+            pend_live[free] = True
+            fin = done_np & pend_live
+            if fin.any():
+                push_raw(pend_obs[fin], pend_act[fin], pend_ret[fin], nobs_np[fin],
+                         np.ones(int(fin.sum()), dtype=np.float32), pend_disc[fin])
+                pend_live[fin] = False
 
         if buf.size >= batch_size:
-            s, a, r, ns, d = buf.sample(batch_size)
+            s, a, r, ns, d, disc = buf.sample(batch_size)
             with torch.no_grad():
                 a_star = railed_q(q(ns), ns).masked_fill(
                     ~valid_from_obs(ns), _NEG).argmax(1, keepdim=True)
-                target = r + gamma * (1.0 - d) * q_target(ns).gather(1, a_star).squeeze(1)
+                target = r + disc * (1.0 - d) * q_target(ns).gather(1, a_star).squeeze(1)
             loss = nn.functional.smooth_l1_loss(
                 q(s).gather(1, a.unsqueeze(1)).squeeze(1), target)
             losses.append(loss.item())
@@ -281,8 +338,11 @@ if __name__ == "__main__":
     seeds = [int(x) for x in sys.argv[2].split(",")] if len(sys.argv) > 2 else [0]
     mode = sys.argv[3] if len(sys.argv) > 3 else "joint"
     railed = len(sys.argv) > 4 and sys.argv[4] == "railed"
+    # "fixed" = rails enforced during exploration + semi-MDP transitions over the
+    # forced tier-1 runs, so learning happens only on decisions the network can make.
+    fixed = len(sys.argv) > 5 and sys.argv[5] == "fixed"
     assert mode in ("joint", "marginal", "uniform", "uniform_avg")
-    tag = mode + ("_railed" if railed else "")
+    tag = mode + ("_railed" if railed else "") + ("_fixed" if fixed else "")
     out_dir = os.path.join(ROOT, "big_Q_games", "results")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -302,7 +362,8 @@ if __name__ == "__main__":
         for sd in seeds:
             print(f"seed {sd}", flush=True)
             net, sec = train(ins, seed=sd, mode=mode, railed=railed, n_steps=n_steps,
-                             writer=mw, csv_file=mf)
+                             writer=mw, csv_file=mf,
+                             rail_explore=fixed, semi_mdp=fixed)
             v = per_human(net, ins, railed)
             for i, x in enumerate(v):
                 hw.writerow([sd, i, x])

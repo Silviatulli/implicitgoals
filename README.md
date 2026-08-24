@@ -11,7 +11,8 @@ Two branches matter:
   ahead. It adds variants of the games so that `|I|` — the number of hypotheses,
   written Φ in the paper — can be greater than 1, and every change made since
   then lives here too. It stays **exactly ahead of** `yacine_overcooked`: same
-  history, extra commits on top, no divergence.
+  history, extra commits on top, no divergence. You can ignore the `big_Q_games`
+  folder, it is just a scratchpad for testing new ideas, not clean code.
 
 ## How the code is split
 

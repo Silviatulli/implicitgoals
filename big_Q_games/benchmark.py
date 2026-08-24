@@ -75,6 +75,9 @@ def dqn_rows():
     out = {}
     for path in sorted(glob.glob(os.path.join(RES, "dqn_humans_*.csv"))):
         tag = os.path.basename(path)[len("dqn_humans_"):-len(".csv")]
+        fixed = tag.endswith("_fixed")
+        if fixed:
+            tag = tag[:-len("_fixed")]
         railed = tag.endswith("_railed")
         base = tag[:-len("_railed")] if railed else tag
         rows = list(csv.DictReader(open(path)))
@@ -83,7 +86,8 @@ def dqn_rows():
         seeds = sorted({int(r["seed"]) for r in rows})
         v = np.mean([[float(r["n_queries"]) for r in rows if int(r["seed"]) == s]
                      for s in seeds], axis=0)
-        out[LABEL.get(base, base) + (" + rails" if railed else "")] = (v, len(seeds))
+        out[LABEL.get(base, base) + (" + rails" if railed else "")
+            + (" + fixes" if fixed else "")] = (v, len(seeds))
     return out
 
 

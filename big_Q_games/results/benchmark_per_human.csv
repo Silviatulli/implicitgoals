@@ -191,6 +191,18 @@ DQN uniform avg + rails,8,25.0,3
 DQN uniform avg + rails,9,30.3333,3
 DQN uniform avg + rails,10,7.3333,3
 DQN uniform avg + rails,11,2.6667,3
+DQN uniform avg + rails + fixes,0,2.5,2
+DQN uniform avg + rails + fixes,1,25.0,2
+DQN uniform avg + rails + fixes,2,25.0,2
+DQN uniform avg + rails + fixes,3,25.0,2
+DQN uniform avg + rails + fixes,4,31.0,2
+DQN uniform avg + rails + fixes,5,4.5,2
+DQN uniform avg + rails + fixes,6,1.5,2
+DQN uniform avg + rails + fixes,7,5.0,2
+DQN uniform avg + rails + fixes,8,25.0,2
+DQN uniform avg + rails + fixes,9,30.5,2
+DQN uniform avg + rails + fixes,10,5.0,2
+DQN uniform avg + rails + fixes,11,5.0,2
 DQN uniform 1/2 + rails,0,5.3333,3
 DQN uniform 1/2 + rails,1,47.3333,3
 DQN uniform 1/2 + rails,2,41.3333,3
@@ -203,3 +215,15 @@ DQN uniform 1/2 + rails,8,42.3333,3
 DQN uniform 1/2 + rails,9,42.0,3
 DQN uniform 1/2 + rails,10,4.0,3
 DQN uniform 1/2 + rails,11,1.3333,3
+DQN uniform 1/2 + rails + fixes,0,7.0,2
+DQN uniform 1/2 + rails + fixes,1,46.5,2
+DQN uniform 1/2 + rails + fixes,2,40.5,2
+DQN uniform 1/2 + rails + fixes,3,45.5,2
+DQN uniform 1/2 + rails + fixes,4,45.0,2
+DQN uniform 1/2 + rails + fixes,5,2.0,2
+DQN uniform 1/2 + rails + fixes,6,4.5,2
+DQN uniform 1/2 + rails + fixes,7,2.0,2
+DQN uniform 1/2 + rails + fixes,8,44.5,2
+DQN uniform 1/2 + rails + fixes,9,43.0,2
+DQN uniform 1/2 + rails + fixes,10,8.0,2
+DQN uniform 1/2 + rails + fixes,11,3.5,2

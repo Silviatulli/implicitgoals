@@ -955,32 +955,6 @@ comparability graphs are **perfect**, and maximal-clique enumeration on them adm
 polynomial delay — the time between two successive outputs is polynomial, so the
 run never stalls, it only produces answers.
 
-### 8.5 Measured
-
-Wall-clock on real instances, DFS (`B`) against cliques (`C`):
-
-| \|B\| | B | C | speedup |
-|---|---|---|---|
-| 20 | 0.33 s | 0.004 s | 84× |
-| 27 | 6.5 s | 0.007 s | 1001× |
-| 173 | — | 0.025 s | — |
-| 402 | — | 0.15 s | — |
-
-At the default `experiment.py` configuration (|B| ≈ 13–16, where
-`--max-bottlenecks 17` holds it), `t_algorithm1` improves 5.5×–34×:
-
-```
-taxiworld   0.09433s -> 0.00278s   33.9x
-taxiworld   0.09107s -> 0.00356s   25.6x
-rockworld   0.03037s -> 0.00206s   14.7x
-gridworld   0.03234s -> 0.00236s   13.7x
-```
-
-The **space** difference is what lifts the cap, though. B allocates a dict with up
-to `2ⁿ` entries — ~131,000 at n = 17, and that memory wall is what
-`--max-bottlenecks 17` exists to avoid. C stores `n` integers: at n = 402 the entire
-graph is 402 Python ints.
-
 ---
 
 ## 9. Validation
@@ -1028,7 +1002,7 @@ problem but 2-SAT is linear. These instances were never general instances.
 
 ---
 
-## 11. Reading
+## 11. Reading (suggested by Claude)
 
 **The DP being replaced**
 - Held & Karp, *A Dynamic Programming Approach to Sequencing Problems*,
