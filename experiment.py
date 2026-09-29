@@ -84,7 +84,11 @@ All defaults (num_simu, sizes, humans, ...) live in parse_args() below.
 """
 
 import os
+import sys
 import csv
+import shlex
+import socket
+import datetime
 import time
 import random
 import argparse
@@ -119,19 +123,8 @@ from taxiworld import (
     plan_determinized_models as plan_taxiworlds,
 )
 
-from overcooked_env import (
-    # no-movement MDP: state = inv * NUM_POT + pot
-    build_transition_matrix_nomove,
-    serving_matrices_nomove,
-    # encoding constants
-    CLIENT_SERVED,
-)
 from gridworld_core import (board_side, status_line, set_status_sink,
                             RETRY_REPORT_EVERY, UnsolvableLayout)
-# Unlike the four grid domains, overcooked_env hands back (T_R, T_H_list)
-# directly instead of a stochastic MDP to determinize: there is no
-# augment_mdp_to_deterministic step, the matrices are already
-# T[state, action] → next_state.
 
 
 # ── Shared, game-agnostic pipeline ───────────────────────────────────────────
@@ -153,6 +146,8 @@ from bottlenecks import (
     evaluate_policy_on_real_human,
 )
 
+from rails import RailedQNet, RailsOnlyNet
+
 
 # Four selection rules plus the random-order control: five columns, or nine with
 # --h2, which runs each rule a second time wearing the dominance mask.
@@ -169,15 +164,33 @@ from bottlenecks import (
 # it asks better ones — do not read the gap as a saving.
 BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
 
+# --rails adds a "+ rails" twin of Random and of every rule: the same policy
+# wrapped in rails.RailedQNet (Random becomes rails.RailsOnlyNet — tier 1 first,
+# tier 3 never, uniform among tier 2).  The twins are appended *after* every
+# original column and never wear H2, so the original columns are computed exactly
+# as without the flag: same policies, same human, same random order.
+RAIL_BASES = ("query_all",) + BASES
 
-def conditions_for(use_h2):
+
+def conditions_for(use_h2, use_rails=False):
     """Column order for one run: Random, then each rule, each immediately
-    followed by its "+ H2" twin when the dominance layer is switched on."""
+    followed by its "+ H2" twin when the dominance layer is switched on, then
+    the "+ rails" twins when the guardrails are."""
     return ("query_all",) + tuple(
-        c for b in BASES for c in ((b, f"{b}_h2") if use_h2 else (b,)))
+        c for b in BASES for c in ((b, f"{b}_h2") if use_h2 else (b,))) + (
+        tuple(f"{b}_rails" for b in RAIL_BASES) if use_rails else ())
 
 
-CONDITIONS = conditions_for(True)    # every column the pipeline can produce
+def base_of(name):
+    """The policy a column runs: "info_gain_h2" and "info_gain_rails" both run
+    info_gain's."""
+    for suffix in ("_h2", "_rails"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
+CONDITIONS = conditions_for(True, True)    # every column the pipeline can produce
 
 BASE_LABELS = {
     "strategic_exact": "VI baseline",
@@ -189,16 +202,28 @@ CONDITION_LABELS = {"query_all": "Random"}
 for _b, _lab in BASE_LABELS.items():
     CONDITION_LABELS[_b] = _lab
     CONDITION_LABELS[f"{_b}_h2"] = f"{_lab} + H2"
+for _b in RAIL_BASES:
+    CONDITION_LABELS[f"{_b}_rails"] = f"{CONDITION_LABELS[_b]} + rails"
 
 # One hue per selection rule, two shades of it: hue answers "which rule?", shade
 # answers "with H2 or not?", so the gap within a pair is what the dominance layer
 # bought.  tab20 is built for this — ten (dark, light) pairs of one hue.  Random
-# is grey: a control, not a rule.
+# is grey: a control, not a rule.  A "+ rails" twin keeps its rule's colour and
+# is hatched instead.
 _TAB20 = plt.get_cmap("tab20").colors
 CONDITION_COLORS = {"query_all": "#9e9e9e"}
 for _i, _b in enumerate(BASES):
     CONDITION_COLORS[_b]         = _TAB20[2 * _i + 1]   # light — rule alone
     CONDITION_COLORS[f"{_b}_h2"] = _TAB20[2 * _i]       # dark  — rule + H2
+for _b in RAIL_BASES:
+    CONDITION_COLORS[f"{_b}_rails"] = CONDITION_COLORS[_b]
+CONDITION_HATCHES = {c: ("//" if c.endswith("_rails") else None)
+                     for c in CONDITION_COLORS}
+
+# The |B| bar opening each game's group in query_counts.png — dark, so it reads
+# as a reference rather than as one more condition.
+N_B_COLOR = "#37474f"
+N_B_LABEL = "|B| (query set size)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,8 +236,7 @@ for _i, _b in enumerate(BASES):
 # determinize them; for Overcooked it means assembling the serving matrices.
 
 GRID_GAMES = ("gridworld", "puddleworld", "rockworld", "taxiworld")
-ALL_GAMES  = GRID_GAMES + ("overcooked",)
-
+ALL_GAMES = GRID_GAMES
 
 @contextlib.contextmanager
 def _quiet():
@@ -580,7 +604,7 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
 
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
                  max_exact_n=17, filter_toboggans=False, max_bottlenecks=17,
-                 use_h2=False, bottleneck_bundle=None):
+                 use_h2=False, bottleneck_bundle=None, use_rails=False):
     """Run the whole pipeline once on one instance and time every stage.
 
     The Query MDP has two distinct inputs, and they are not the same set:
@@ -636,6 +660,11 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         `*_h2` column appears in the returned row or counts.  H2 is unsound and
         is not in the paper — see bottlenecks.build_dominance.
 
+    use_rails : bool
+        Add a "+ rails" twin of Random and of every rule: the same policy object
+        wrapped in rails.RailedQNet, Random replaced by rails.RailsOnlyNet.  The
+        twins run after every original column, so those are unchanged.
+
     Returns (row, counts, success): `row` holds the problem sizes and per-stage
     times, `counts` maps each of the run's conditions to the queries that condition needed
     on one episode, and `success` says whether the episode identified the human
@@ -652,9 +681,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     """
     # The columns this repetition produces, and the stage timers an early return
     # has to NaN out — both narrower when H2 is off.
-    conditions = conditions_for(use_h2)
+    conditions = conditions_for(use_h2, use_rails)
     unrun_stages = (["t_dominance"] if use_h2 else []) + \
-        [f"t_solve_{c}" for c in conditions if c != "query_all"] + \
+        [f"t_solve_{c}" for c in conditions if base_of(c) != "query_all"] + \
         [f"t_sim_{c}" for c in conditions]
 
     # n_reachable: how much of the state space the robot can actually get to,
@@ -789,20 +818,40 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         if use_h2:
             row[f"t_solve_{base}_h2"] = base_solve[base] + t_dominance
 
+    # The rails need no solve of their own: RailedQNet wraps the policy above and
+    # recomputes the tiers from (K_I, K_not) at every query, so a "+ rails" column
+    # costs what its rule costs and the tiers are paid for in t_sim.
+    railed = {}
+    if use_rails:
+        for base in BASES:
+            railed[base] = (None if policies[base] is None
+                            else RailedQNet(policies[base], I_array))
+            row[f"t_solve_{base}_rails"] = base_solve[base]
+
     # The same human faces every condition within a repetition, so the counts are
     # paired: their differences are not polluted by which human was drawn.
     oracle_bottlenecks = list(oracle_sets[np.random.randint(len(oracle_sets))])
 
     counts, success = {}, float("nan")
     for name in conditions:
-        base = name[:-3] if name.endswith("_h2") else name
-        if base != "query_all" and policies[base] is None:
+        base = base_of(name)
+        if name.endswith("_rails"):
+            if base == "query_all":
+                # Built here, not above: its seed is drawn off the global numpy
+                # stream, and drawing it only after every original column has run
+                # leaves Random's shuffle exactly as it is without --rails.
+                policy = RailsOnlyNet(I_array, seed=int(np.random.randint(2 ** 31)))
+            else:
+                policy = railed[base]
+        else:
+            policy = policies.get(base)
+        if base != "query_all" and policy is None:
             counts[name] = float("nan")
             row[f"t_sim_{name}"] = float("nan")
             continue
         t0 = time.perf_counter()
         counts[name], flag = _query_episode(
-            policies.get(base), oracle_bottlenecks, I_array, b_to_int,
+            policy, oracle_bottlenecks, I_array, b_to_int,
             dominance=dominance if name.endswith("_h2") else None)
         row[f"t_sim_{name}"] = time.perf_counter() - t0
         # Read the flag off a condition that does not wear H2.  Every condition
@@ -814,7 +863,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         # adds K_not bits, which shrinks I_hat and makes the success test easier
         # and the failure test harder.  It is only to keep this column meaning
         # the instance's property rather than the last condition's.
-        if not name.endswith("_h2"):
+        if name == base:
             success = flag
 
     row.setdefault("skipped", "")   # may already hold the VI-skipped note
@@ -965,7 +1014,7 @@ CONFIG_KEYS = ["game", "room_side", "rooms_per_side", "board_side",
                "num_humans", "num_simu"]
 
 
-def column_layout(use_h2):
+def column_layout(use_h2, use_rails=False):
     """The CSV header of a run, derived from the conditions it will produce.
 
     Returns (conditions, stage_times, episode_fields, time_fields, query_fields).
@@ -984,8 +1033,9 @@ def column_layout(use_h2):
     identified — the two are not commensurable, hence the split means alongside
     the pooled ones.
     """
-    conditions  = conditions_for(use_h2)
-    solve_times = [f"t_solve_{c}" for c in conditions if c != "query_all"]
+    conditions  = conditions_for(use_h2, use_rails)
+    solve_times = [f"t_solve_{c}" for c in conditions
+                   if base_of(c) != "query_all"]
     sim_times   = [f"t_sim_{c}"   for c in conditions]
 
     stage_times = (["t_build", "t_rejected", "t_bottlenecks", "t_toboggan_filter",
@@ -1002,7 +1052,7 @@ def column_layout(use_h2):
 
     query_fields = (["game", "room_side", "rooms_per_side", "board_side",
                      "num_humans", "num_simu", "n_episodes",
-                     "n_success", "n_failure"]
+                     "n_success", "n_failure", "n_B_mean", "n_B_std"]
                     + [f"{c}_{stat}" for c in conditions
                        for stat in ("mean", "std", "mean_success", "mean_failure")]
                     + ["saved_queries", "skipped"])
@@ -1070,6 +1120,12 @@ def parse_args(argv=None):
                         "and was dropped from the paper — it lowers query counts "
                         "by granting answers the oracle never gave, so its "
                         "columns are not comparable with the others (default: off)")
+    p.add_argument("--rails", action="store_true",
+                   help="also run Random and every rule wrapped in the provable "
+                        "guardrails of rails.py: tier-1 bottlenecks "
+                        "(in no compatible hypothesis) asked first, tier-3 (in "
+                        "every compatible hypothesis) never.  Adds five '+ rails' "
+                        "columns and leaves the others unchanged (default: off)")
 
     # ── Cost ceilings ────────────────────────────────────────────────────────
     # Maintainer's note, deliberately not in the help text below: it is about the
@@ -1127,11 +1183,30 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def write_config(args, argv):
+    """Record how this out_dir was produced, in ``config.txt`` next to the results.
+
+    Written before the sweep starts, so a run that dies still says what it was.
+    Both the command as typed and every resolved argument are kept: the second
+    is what pins the defaults, which the command line alone does not.
+    """
+    path = os.path.join(args.out_dir, "config.txt")
+    with open(path, "w") as f:
+        f.write(f"date     {datetime.datetime.now().isoformat(timespec='seconds')}\n")
+        f.write(f"host     {socket.gethostname()}\n")
+        f.write(f"command  uv run python experiment.py {shlex.join(argv)}\n\n")
+        f.write("resolved arguments (defaults included):\n")
+        for k, v in sorted(vars(args).items()):
+            f.write(f"  --{k.replace('_', '-'):<22} {v}\n")
+    return path
+
+
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
+    write_config(args, sys.argv[1:] if argv is None else argv)
     (conditions, stage_times, episode_fields,
-     time_fields, query_fields) = column_layout(args.h2)
+     time_fields, query_fields) = column_layout(args.h2, args.rails)
 
     # Overcooked has no grid size, so it gets one job per human count; the four
     # grid domains get the full (room side x humans) cross product.
@@ -1172,7 +1247,10 @@ def main(argv=None):
     # One tqdm tick per repetition, so the bar reflects the real work: a
     # repetition rebuilds the instance (a fresh random map for the grid games)
     # and re-runs the whole pipeline on it.
-    bar = tqdm(total=len(jobs) * args.num_simu, desc="benchmark", unit="rep")
+    # dynamic_ncols: re-read the terminal width on every redraw, so resizing a
+    # tmux pane mid-run does not wrap the bar and leave a stale line per refresh.
+    bar = tqdm(total=len(jobs) * args.num_simu, desc="benchmark", unit="rep",
+               dynamic_ncols=True)
 
     # Everything the run has to say while the bar is up goes through one of two
     # channels, and neither writes to the terminal itself:
@@ -1236,7 +1314,7 @@ def main(argv=None):
                     *instance, max_exact_n=args.max_exact_n,
                     filter_toboggans=(game == "overcooked"),
                     max_bottlenecks=args.max_bottlenecks, use_h2=args.h2,
-                    bottleneck_bundle=bundle)
+                    bottleneck_bundle=bundle, use_rails=args.rails)
             row["t_build"]    = t_build
             row["t_rejected"] = t_rejected
             row["n_draws"]    = n_draws
@@ -1383,6 +1461,12 @@ def _aggregate_queries(key, reps, counts_per_rep, successes, conditions):
     row = dict(key)
     by_cond = {c: [d.get(c, float("nan")) for d in counts_per_rep] for c in conditions}
 
+    # |B| is what every count above scales with — Random's ceiling — so it
+    # travels with them: the query plot draws it as each game's first bar.
+    n_B = [r.get("n_B", float("nan")) for r in reps]
+    row["n_B_mean"] = _nanmean(n_B)
+    row["n_B_std"]  = _nanstd(n_B)
+
     exact_counts = by_cond["strategic_exact"]
     # Counted on query_all, not on the VI baseline: --max-exact-n can skip VI on
     # a repetition the greedy rules still completed, and those episodes are real.
@@ -1496,15 +1580,22 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
 
         games = list(sub["game"])
         x = np.arange(len(games))
-        width = 0.85 / len(conditions)
-        for i, cond in enumerate(conditions):
-            offset = (i - (len(conditions) - 1) / 2) * width
+        # Slot 0 is |B|, the conditions follow: the size of the problem sits
+        # next to the counts it bounds.
+        n_slots = len(conditions) + 1
+        width = 0.85 / n_slots
+        ax.bar(x - (n_slots - 1) / 2 * width, sub["n_B_mean"], width,
+               yerr=sub["n_B_std"], capsize=2, color=N_B_COLOR,
+               linewidth=0, label=N_B_LABEL)
+        for i, cond in enumerate(conditions, start=1):
+            offset = (i - (n_slots - 1) / 2) * width
             ax.bar(x + offset, sub[f"{cond}_mean"], width,
                    yerr=sub[f"{cond}_std"], capsize=2,
                    color=CONDITION_COLORS[cond],
-                   label=CONDITION_LABELS[cond])
+                   hatch=CONDITION_HATCHES[cond], edgecolor="white",
+                   linewidth=0, label=CONDITION_LABELS[cond])
         ax.set_title(title, fontsize=10)
-        ax.set_ylabel("mean queries per episode")
+        ax.set_ylabel("mean queries per episode  ·  |B|")
         _rotate_xticks(ax, games, x)
 
     for ax in flat[len(configs):]:      # unused cells in the last row
@@ -1516,25 +1607,38 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
     # rather than spelled out.  Nine flat entries also laid out badly: a legend
     # fills column-major, so "VI + H2" ended up stacked above
     # "H1".  With H2 off the same five entries carry a single swatch each.
-    pair_handles = [Patch(facecolor=CONDITION_COLORS["query_all"])]
-    pair_labels  = [CONDITION_LABELS["query_all"]]
-    for b in BASES:
+    # With rails on, each entry also carries a hatched swatch for its "+ rails"
+    # twin; Random gets one too, since it is railed as well.
+    with_rails = any(c.endswith("_rails") for c in conditions)
+    pair_handles, pair_labels = [Patch(facecolor=N_B_COLOR)], [N_B_LABEL]
+    for b in RAIL_BASES:
         shades = (Patch(facecolor=CONDITION_COLORS[b]),)
-        if with_h2:
+        if with_h2 and b != "query_all":
             shades += (Patch(facecolor=CONDITION_COLORS[f"{b}_h2"]),)
-        pair_handles.append(shades)
-        pair_labels.append(BASE_LABELS[b])
+        if with_rails:
+            shades += (Patch(facecolor=CONDITION_COLORS[f"{b}_rails"],
+                             hatch="//", edgecolor="white", linewidth=0),)
+        pair_handles.append(shades if len(shades) > 1 else shades[0])
+        pair_labels.append(CONDITION_LABELS[b])
+    variants = ["rule alone"] + (["+ H2"] if with_h2 else []) \
+        + (["+ rails (hatched)"] if with_rails else [])
+    # One row fits under two or more subplots; a single subplot is too narrow
+    # and would clip the last entries, so the legend wraps onto two rows there.
+    legend_ncol = (len(pair_labels) if ncols >= 2
+                   else int(np.ceil(len(pair_labels) / 2)))
+    legend_rows = int(np.ceil(len(pair_labels) / legend_ncol))
     fig.legend(pair_handles, pair_labels, loc="lower center",
-               ncol=len(pair_labels), fontsize=10, frameon=False,
+               ncol=legend_ncol, fontsize=10, frameon=False,
                handler_map={tuple: HandlerTuple(ndivide=None, pad=0.0)},
                handlelength=3.0, handletextpad=0.6, columnspacing=2.4,
-               title=("left bar = rule alone   ·   right bar = rule + H2"
-                      if with_h2 else "one bar per selection rule"),
+               title=("   ·   ".join(variants) if len(variants) > 1
+                      else "one bar per selection rule"),
                title_fontsize=9)
     fig.suptitle("Query conditions — four selection rules"
-                 + (", with and without H2" if with_h2 else ""),
+                 + (", with and without H2" if with_h2 else "")
+                 + (", with and without rails" if with_rails else ""),
                  fontsize=12)
-    fig.tight_layout(rect=[0, 0.09, 1, 0.97])
+    fig.tight_layout(rect=[0, 0.02 + 0.07 * legend_rows / nrows, 1, 0.97])
     query_plot_path = os.path.join(out_dir, "query_counts.png")
     fig.savefig(query_plot_path, dpi=150)
     plt.close(fig)
@@ -1691,6 +1795,7 @@ def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
     short = {"query_all": "rand", "strategic_exact": "VI", "info_gain": "H1",
              "proximity": "H3", "frequency": "H4"}
     short.update({f"{b}_h2": f"{short[b]}+2" for b in BASES})
+    short.update({f"{b}_rails": f"{short[b]}+R" for b in RAIL_BASES})
     header = "".join(f"{short[c]:>8}" for c in conditions)
     print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):

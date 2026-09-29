@@ -28,7 +28,7 @@ evaluated human's own subgoal set, against the hypotheses in I that the robot is
 trying to match it to.
 
 H3 is *not* the version in the current draft — it ranks bottlenecks by Euclidean
-distance to the goal, in three tiers.  See solve_query_mdp_proximity.
+distance to the goal.  See solve_query_mdp_proximity.
 
 Nothing in this module knows what a recipe, an inventory or a kitchen is.  A
 problem instance is fully described by four things:
@@ -1259,38 +1259,20 @@ def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
 def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None,
                               positions=None, goal_state=None):
-    """Hypothesis 3 — three tiers, with Euclidean proximity inside the middle one.
+    """Hypothesis 3 — Euclidean proximity: nearest the goal first.
 
-    Distance alone is not the rule, because most bottlenecks are not worth asking
-    about at all.  Split B by how many hypotheses hold a bottleneck:
-
-      1. **in no I_k** — asked first.  It belongs to no achievable subset, so a
-         YES proves the human's subgoal set is outside I: failure, found at once
-         instead of after the whole budget.  A NO is needed before any hypothesis
-         can be certified, so the query is never wasted either way.
-      2. **in some but not all** — the only tier where the answer discriminates,
-         and the only place the geometry is used: nearest the goal first, by
-         straight-line distance.
-      3. **in every I_k** — asked last, which in practice means never.  The oracle
-         cannot say anything that moves either terminal test: a YES leaves I_hat
-         untouched, and K_I stays inside every I_k so no failure can trigger.
-         goal_state lives here, being a bottleneck of every model — which is what
-         stops H3 from spending its first query on the goal, as a pure distance
-         ranking does (distance 0 is the smallest there is).
-
-    Tier 3 is never reached because the episode always ends first: once every
-    bottleneck outside tier 3 is answered, either the YES bits all sit in one I_k
-    (success, since the tier-3 bits are in that I_k by definition) or they do not
-    (failure).  Ranking rather than removing keeps the action set equal to B, so
-    the bit order still matches I_array and every other condition.
+    Pure distance, a ranking fixed before the episode that ignores I entirely.
+    It does not sort B into "in no I_k / in some / in every I_k" tiers: those
+    are the rails, which experiment.py --rails applies to every rule alike
+    (rails.py), so H3 is compared with H1 and H4 on the same footing.  A
+    consequence worth knowing: goal_state, a bottleneck of every model, sits at
+    distance 0 and is asked first although no answer about it can move either
+    terminal test.
 
     Straight-line means straight-line: walls, one-way doors and obstacles are
-    ignored inside tier 2, so two cells either side of a sealed wall can rank as
-    neighbours.  That is the definition, not an oversight — a graph distance
-    would respect them, and is a different hypothesis.
-
-    The tiers come from I, the full hypothesis space, and are fixed for the
-    episode; H3 does not re-derive them from the consistent set as H1 and H4 do.
+    ignored, so two cells either side of a sealed wall can rank as neighbours.
+    That is the definition, not an oversight — a graph distance would respect
+    them, and is a different hypothesis.
 
     Parameters
     ----------
@@ -1327,29 +1309,14 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
             f"{len(missing)} bottleneck(s) have no position: "
             f"{missing[:5]}{'...' if len(missing) > 5 else ''}")
 
-    T = _hypothesis_matrix(I, B_to_idx)          # (len(I), n) bool
-    in_none = ~T.any(0)
-    # `and len(I)` matters: with no hypotheses at all, all(0) over zero rows is
-    # vacuously True everywhere, which would put every bottleneck in tier 3 and
-    # ask about none of them.  With I empty they are all in no hypothesis.
-    in_all = T.all(0) & bool(len(I))
-
     goal_pos = np.asarray(positions[int(goal_state)], dtype=np.float64)
     dist = np.array([
         float(np.linalg.norm(np.asarray(positions[b], dtype=np.float64) - goal_pos))
         for b in unique_B])
 
-    # Tier offsets, sized off the data rather than fixed: one span is wider than
-    # any distance on this board, so the three bands cannot overlap however large
-    # the board gets.  Finite on purpose — evaluate_policy_on_real_human masks
-    # already-queried actions to -1e9, so a -inf tier would rank *below* them and
-    # the argmax would re-query a spent bottleneck.
-    span = float(dist.max()) + 1.0 if dist.size else 1.0
-    tier = np.where(in_none, 1.0, np.where(in_all, -1.0, 0.0))
-    # Negated distance so that, inside a tier, nearest the goal is asked first.
-    score = span * tier - dist
-    return GreedyQNet(len(unique_B), T, unique_B, B_to_idx,
-                      rule="static", static_score=score)
+    # Negated distance so that nearest the goal is asked first.
+    return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
+                      unique_B, B_to_idx, rule="static", static_score=-dist)
 
 def build_dominance(I, B):
     """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G, where

@@ -223,43 +223,51 @@ across leaves.
 The greedy completion is the pseudocode's distinguishing feature: it returns sets
 that are already maximal, so **no separate maximality filter is needed**.
 
-### What the code on `main` actually does
+### What the experiments on `main` actually run
 
-The pseudocode and the implementation
-(`maximal_achievable_subsets.optimized_find_maximally_achievable_subsets` on the
-`main` branch) differ, in ways that change the output. Three findings, verified by
-running that branch.
-
-**(i) The include/exclude enumeration is there.** Printed line 20 has only the
-include branch, so the descent would reach a single leaf — the whole of `B`. The
-code has both calls, so that is a transcription slip, not a design one.
-
-**(ii) The leaf logic is not a greedy completion — it is a no-op.**
+`maximal_achievable_subsets.py` on `main` carries several versions of Algorithm 1.
+The one the experiments call is `improved_find_maximally_achievable_subsets`
+(`parallel_experiments.py`, where it is timed as the "pruning" variant against a
+brute-force `find_maximally_achievable_subsets_no_pruning` run only when
+`|B| ≤ 12`). It is the version described here; the others were already superseded.
 
 ```python
-if check_achievability_cached(frozenset(current_subset)):
-    for i in range(len(current_subset), n):
-        new_subset = current_subset + (B_list[i],)
-        if not check_achievability_cached(frozenset(new_subset)):
-            yield frozenset(current_subset)      # <- yields
-            return
-    yield frozenset(current_subset)              # <- yields the SAME thing
-return
+fringe = [frozenset({b}) for b in B if check_achievability({b}, M_R)]
+I = set()
+while fringe:
+    I_prime = fringe.pop(0)
+    for c in B - I_prime:
+        new_set = I_prime | {c}
+        if check_achievability(new_set, M_R):
+            fringe.append(new_set)
+        elif all(not check_achievability(I_prime | {s}, M_R) for s in B - I_prime):
+            I.add(I_prime)
 ```
 
-Both exits yield `frozenset(current_subset)`. Nothing is ever accumulated into a
-running `maximal_subset` as pseudocode line 15 specifies, so the loop only ever
-causes an early `return` and never changes what is emitted. **The result is every
-achievable subset, not the maximal ones.** On the §2 board (with a stand-in
-achievability oracle) it returns all **24** achievable subsets — `{}`, all five
-singletons, every achievable pair — where the answer is **2**.
+**The idea is the right one: grow achievable sets bottom-up.** It starts from the
+achievable singletons and adds one bottleneck at a time, and only an achievable set
+is ever extended. Achievability is downward-closed, so a superset of an
+unachievable set can never be achievable, and this never descends into one. The
+sets it tests are the achievable ones plus their immediate frontier — when few
+subsets are achievable, that is a small fraction of `2ⁿ`. B (§5) keeps exactly this
+pruning.
 
-The loop also indexes with a cardinality (`range(len(current_subset), n)`, matching
-pseudocode line 12), so the candidates it walks are positions
-`|current_subset| … n−1` rather than the bottlenecks not already chosen.
+Three findings, from reading the code and replaying its control flow with a
+stand-in achievability oracle.
+
+**(i) No visited set: a set of size `m` is processed `m!` times.** `fringe.append`
+does not check whether `new_set` was already queued or processed. `{a,b}` is
+queued once from `{a}` and once from `{b}`; each copy then queues `{a,b,c}`, which
+therefore arrives 6 times, and so on. With every subset achievable the number of
+pops is `Σ C(n,m)·m!` — measured: 64 at n = 4, 1,956 at n = 6, 13,699 at n = 7.
+
+**(ii) `B` itself is never reported.** A set enters `I` only from inside the `for c
+in B - I_prime` loop, when some extension fails. When `I_prime = B` that loop is
+empty, so a fully achievable `B` is never added. On an open board — every subset
+achievable, the answer is `{B}` — the function returns `I = ∅`.
 
 **(iii) `check_achievability` rejects every non-empty subset.** This one dominates
-the others. In `DeterminizedMDP`:
+the others, and it is shared by every version on `main`. In `DeterminizedMDP`:
 
 ```python
 def reward_function_for_goingthrough_all_bottleneck(self, state, action, next_state):
@@ -296,11 +304,8 @@ check_achievability(single bottleneck) = False
 check_achievability(empty set)         = True
 ```
 
-**So the branch returns `I = {∅}` on every instance** — reproduced at |B| = 1 and
-|B| = 4, both yielding just the empty set.
-
-The two defects layer: (iii) masks (ii), and fixing (iii) alone would expose (ii)
-— every achievable subset instead of the maximal ones. The fix for (iii) is to
+With no achievable singleton the initial fringe is empty, so `I = ∅` on every
+instance. (iii) masks (i) and (ii): fixing it alone would expose both. The fix is to
 compare like with like (store bottlenecks as positions, or test
 `tuple(next_state)`); which convention to adopt depends on the rest of that branch.
 
@@ -324,27 +329,33 @@ for I in possible_bottleneck_sets:
 a value iteration over `2^m · |S|` states: the call itself is exponential in the
 subset size.
 
-- **Leaves**: `2ⁿ`.
-- **Distinct subsets tested**: `2ⁿ` (the `lru_cache` removes repeats, not the work).
-- **Summed cost**: `Σ_{S ⊆ B} 2^|S| · |S|  =  3ⁿ · |S|`, since `Σ C(n,m)·2^m = 3ⁿ`.
+The bottom-up growth decides *which* subsets pay that price: every achievable
+subset `S`, plus the extensions of it that fail. Ignoring the duplicates of (i),
 
-**Algorithm A is `Θ(3ⁿ · |S| · VI-iterations)`.** The `lru_cache` is what keeps it
-from being worse still: without it the greedy loop would re-run those value
-iterations `O(n)` times per leaf. This is also why the 6×6 run in testing was
+- **Subsets tested**: the achievable ones and their frontier — `O(A · n)`, where `A`
+  is the number of achievable subsets.
+- **Summed cost**: `Σ_{S achievable} (n − |S|) · 2^|S| · |S|` value-iteration
+  states.
+
+**Algorithm A's cost is driven by `A`, like B's — but each test is a value iteration
+over `2^m · |S|` states instead of a few bitmask operations.** When most subsets are
+unachievable the pruning keeps it small. On an open board every subset is
+achievable, `A = 2ⁿ`, and the sum becomes `Σ C(n,m)·2^m·… ≥ 3ⁿ · |S|`; the `m!`
+duplicates of (i) multiply that further. This is why the 6×6 run in testing was
 killed by the OOM killer rather than merely being slow — the intermediate MDP is
 materialised as Python tuples.
 
 For contrast, had `CheckAchievability` been the memoized Held–Karp DP of §5, the
-same enumeration would cost `O(2ⁿ · n)`. The gap between `3ⁿ·|S|` and `2ⁿ·n` is the
-price of answering a reachability question with value iteration over an augmented
-MDP.
+same growth would cost `O(A · n²)`, which is B's cost. The gap is the price of
+answering a reachability question with value iteration over an augmented MDP.
 
 ## 5. Algorithm B — the implementation
 
-`bottlenecks.py` as it stands. It differs from §4 in three ways: the
-achievability test is a memoized Held–Karp DP; the descent **prunes** unachievable
-branches; and maximality is a **filter at the end** rather than a greedy completion
-at each leaf.
+`bottlenecks.py` as it stands. It keeps §4's pruning — an unachievable set is never
+extended — and differs in three ways: the achievability test is a memoized
+Held–Karp DP instead of a value iteration; the include/exclude descent reaches each
+subset along exactly one path, so nothing is processed twice; and maximality is a
+**filter at the end**.
 
 ### 5.1 How information flows
 
@@ -559,7 +570,8 @@ def generate_subsets(index, current_mask):
 A binary tree over bit positions: at each level, either leave bottleneck `index`
 out or put it in. The **exclude branch is always taken**; the **include branch only
 if the enlarged set is still achievable**. That single `if` is the only pruning in
-the algorithm, and it is what §4 lacks.
+the algorithm — the same one as §4's bottom-up growth, reached here without
+duplicates.
 
 On this instance: **51 calls, 28 memo entries, 4 prunes**.
 
@@ -881,25 +893,27 @@ tested.
 
 | | achievability queries | cost of ONE query | maximality | total time | space | cost driven by |
 |---|---|---|---|---|---|---|
-| **A** `main` | `2ⁿ` distinct | VI over `2^m · N` states | no-op (see §4) | **`Θ(3ⁿ · N · VI)`** | `O(2ⁿ · N)` peak | `3ⁿ`, **unconditionally** |
+| **A** `main` | `O(A · n)` distinct, each set re-processed `m!` times | VI over `2^m · N` states | `n` extra queries per failing extension | `Σ_{S achievable} (n−m) · 2^m · N · VI`; `≥ 3ⁿ · N` when all subsets are achievable | `O(2ⁿ · N)` peak | `A`, each query exponential in `m` |
 | **B** implementation | `O(A · n)` | `O(n)` bitmask ops, memoized | filter, `O(A·k)` | `O(A · n² + A·k)` | `O(A · n)` | `A`, the achievable subsets |
 | **C** cliques | none | — | free (by construction) | `O(n² + output)`; `O(3^(n/3))` worst | `O(n²/w)` | `k`, **the answer size** |
 
 Three observations, in increasing order of importance.
 
-**A → B is an asymptotic win, and a larger one than it looks.** `3ⁿ` against `2ⁿ`
-is already a separation, but the `N` factor is what dominates in practice: A's
-achievability query builds an MDP over `2^m × N` states and runs value
-iteration on it, where B's answers the same question with a handful of bitmask
-operations against a memo. A 6×6 board was enough to have A killed by the OOM
+**A → B keeps the search and changes the test.** Both prune the same way and both
+visit the achievable subsets, so both are driven by `A`. The difference is the price
+of one visit: A's achievability query builds an MDP over `2^m × N` states and runs
+value iteration on it, where B's answers the same question with a handful of bitmask
+operations against a memo — and B reaches each subset once, where A re-processes a
+set of size `m` up to `m!` times. A 6×6 board was enough to have A killed by the OOM
 killer during testing.
 
 **Answering a reachability question with value iteration is what costs A the
-exponent.** `Σ_{S ⊆ B} 2^|S| = 3ⁿ` is not the enumeration's fault — the enumeration
-is `2ⁿ` in both A and B. The extra factor is entirely the augmented MDP inside
-`CheckAchievability`, which re-encodes "which subgoals have I collected" as MDP
-state and so pays a second powerset on top of the first. Had A called B's memoized
-DP instead, the same enumeration would have cost `O(2ⁿ · n)`.
+extra exponent.** When every subset is achievable, `Σ_S 2^|S| = 3ⁿ` — not the
+search's fault, since the search visits `2ⁿ` subsets in both A and B. The extra
+factor is entirely the augmented MDP inside `CheckAchievability`, which re-encodes
+"which subgoals have I collected" as MDP state and so pays a second powerset on top
+of the first. Had A called B's memoized DP instead, its search would have cost
+`O(A · n²)`, B's cost.
 
 **B → C changes what the cost is proportional to.** This is the real difference, and
 it is not visible in the worst-case column.
