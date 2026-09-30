@@ -44,7 +44,9 @@ Quick start
 
 The board has to be large enough for `rock_density` to yield at least one
 *valuable* rock, or the goal can never absorb and RockWorld raises.  At the
-default densities that means roughly 30 cells or more.
+default densities that means roughly 30 cells or more.  Pass ``valuable_rocks=K``
+to fix the count instead: exactly K valuable rocks whatever the board size, with
+`rock_density` still deciding the dangerous ones (see sample_rock_layout).
 """
 
 import time
@@ -68,7 +70,8 @@ from gridworld_core import (GridWorld, augment_mdp_to_deterministic, board_side,
 # one: `collected` was a bit per valuable rock, so every rock doubled the state
 # space and rock_density could not be honoured.  `collected` is now a single
 # boolean — "have I picked anything up yet" — so the state space is 2 x board^2
-# whatever the density, and rock_density alone decides the map.
+# whatever the density, and rock_density alone decides the map — unless
+# `valuable_rocks` fixes the valuable count, see sample_rock_layout.
 VALUABLE_ROCK_RATIO = 0.4
 
 
@@ -90,9 +93,11 @@ class RockWorld(GridWorld):
                  slip_prob=0.0, gamma=0.99, max_tries=DEFAULT_MAX_TRIES,
                  obstacle_seed=1,
                  rooms_per_side=1, room_side=5,
-                 valuable_positions=None, dangerous_positions=None):
+                 valuable_positions=None, dangerous_positions=None,
+                 valuable_rocks=None):
         self.rock_density = rock_density
         self.valuable_rock_ratio = valuable_rock_ratio
+        self.valuable_rocks = valuable_rocks
         self.valuable_rock_reward = valuable_rock_reward
         self.dangerous_rock_penalty = dangerous_rock_penalty
 
@@ -111,7 +116,8 @@ class RockWorld(GridWorld):
                 board_side(rooms_per_side, room_side), rock_density,
                 random.Random(obstacle_seed),
                 valuable_rock_ratio=valuable_rock_ratio,
-                protected=(start, goal) if start and goal else ())
+                protected=(start, goal) if start and goal else (),
+                valuable_rocks=valuable_rocks)
         self.valuable_positions = list(valuable_positions or [])
         self.dangerous_positions = list(dangerous_positions or [])
         # Membership is asked once per transition, so keep it a set.
@@ -127,7 +133,7 @@ class RockWorld(GridWorld):
                 f"{board_side(rooms_per_side, room_side)}x"
                 f"{board_side(rooms_per_side, room_side)} board, and the goal "
                 f"only absorbs once one has been collected — so no layout can "
-                f"ever be solvable.  Raise rock_density.")
+                f"ever be solvable.  Raise rock_density, or set valuable_rocks.")
 
         super().__init__(start=start, goal=goal,
                          obstacle_density=obstacle_density,
@@ -289,12 +295,21 @@ class RockWorld(GridWorld):
 
 def sample_rock_layout(board, rock_density, rng,
                        valuable_rock_ratio=VALUABLE_ROCK_RATIO,
-                       protected=()):
+                       protected=(), valuable_rocks=None):
     """One rock layout: (valuable_positions, dangerous_positions).
 
     ``rock_density`` decides the count outright — ``board^2 * rock_density``
     rocks, a ``valuable_rock_ratio`` share of them valuable.  Nothing is capped,
     because the state space no longer grows with the rock count.
+
+    ``valuable_rocks=K`` overrides the valuable count only: exactly K valuable
+    rocks, whatever the board.  With a density the count grows as board^2, and a
+    mandatory door stays a bottleneck only while every reachable valuable rock
+    sits on the same side of it — so |I| collapsed on large boards.  The
+    dangerous rocks keep the number the density gives them today,
+    ``total - int(total * valuable_rock_ratio)``: they only change the reward,
+    never a transition or a bottleneck, so there is nothing to tune there.  None
+    (the default) is the density path, draw for draw, so old seeds replay.
 
     Called twice over: once per instance in generate_determinized_models, whose
     result is handed to every model so the robot and the humans see the same
@@ -308,6 +323,14 @@ def sample_rock_layout(board, rock_density, rng,
     n_valuable = int(total_rocks * valuable_rock_ratio)
     free = [(i, j) for i in range(board) for j in range(board)
             if (i, j) not in set(protected)]
+    if valuable_rocks is not None:
+        # Zero would leave the goal unable to absorb (see RockWorld.__init__),
+        # and clipping to the free cells would break "exactly K": refuse both.
+        if not 1 <= valuable_rocks <= len(free):
+            raise ValueError(f"valuable_rocks must be in 1..{len(free)} on a "
+                             f"{board}x{board} board, got {valuable_rocks}")
+        total_rocks = valuable_rocks + (total_rocks - n_valuable)
+        n_valuable = valuable_rocks
     picked = rng.sample(free, min(total_rocks, len(free)))
     return picked[:n_valuable], picked[n_valuable:]
 
@@ -316,7 +339,8 @@ def build_rockworld(start, goal, obstacle_density, rock_density,
                                      obstacle_seed=None,
                                      rooms_per_side=1, room_side=5, slip_prob=0.0,
                                      valuable_positions=None,
-                                     dangerous_positions=None):
+                                     dangerous_positions=None,
+                                     valuable_rocks=None):
     """Generate a ``RockWorld``, on a shared rock layout when one is given."""
     return RockWorld(start=start, goal=goal,
                      obstacle_density=obstacle_density,
@@ -325,7 +349,8 @@ def build_rockworld(start, goal, obstacle_density, rock_density,
                      rooms_per_side=rooms_per_side,
                      room_side=room_side,
                      valuable_positions=valuable_positions,
-                     dangerous_positions=dangerous_positions)
+                     dangerous_positions=dangerous_positions,
+                     valuable_rocks=valuable_rocks)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,12 +391,14 @@ def _make_determinized(obstacle_density, rock_density, model_type,
 
 def plan_determinized_models(num_humans=3, obstacle_density=0.1,
                              rock_density=0.1, seed=None, visualize=False,
-                             rooms_per_side=1, room_side=4, slip_prob=0.0):
+                             rooms_per_side=1, room_side=4, slip_prob=0.0,
+                             valuable_rocks=None):
     """Draw every random choice this instance makes, and build nothing yet.
 
     See gridworld.plan_determinized_models for why this split exists.  The order
     of the draws is the order generate_determinized_models made them: the shared
     rock layout first, then one obstacle seed per model, robot first.
+    ``valuable_rocks`` fixes the valuable count (see sample_rock_layout).
     """
     if seed is not None:
         random.seed(seed)
@@ -384,7 +411,8 @@ def plan_determinized_models(num_humans=3, obstacle_density=0.1,
     # one and the bottleneck sets the pipeline unions would not be comparable.
     size = board_side(rooms_per_side, room_side)
     valuable_positions, dangerous_positions = sample_rock_layout(
-        size, rock_density, random, protected=((0, 0), (size - 1, size - 1)))
+        size, rock_density, random, protected=((0, 0), (size - 1, size - 1)),
+        valuable_rocks=valuable_rocks)
     seeds = [random.randint(1, 10000) for _ in range(num_humans + 1)]
 
     def build(i):
@@ -402,7 +430,7 @@ def plan_determinized_models(num_humans=3, obstacle_density=0.1,
 def generate_determinized_models(num_humans=3, obstacle_density=0.1,
                                  rock_density=0.1, seed=None, verbose=True,
                                  visualize=False, rooms_per_side=1, room_side=4,
-                                 slip_prob=0.0):
+                                 slip_prob=0.0, valuable_rocks=None):
     """Build a robot model + ``num_humans`` human RockWorld models and determinize each.
 
     Parameters
@@ -410,6 +438,10 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
     num_humans : int        number of human models
     obstacle_density : float   obstacle density in [0, 1]
     rock_density : float    rock density in [0, 1]
+    valuable_rocks : int or None
+                            exactly this many valuable rocks, whatever the
+                            board; None lets rock_density decide, as before.
+                            The dangerous rocks follow rock_density either way
     rooms_per_side : int    rooms along each side of the board; 1 is the open
                             board, one room and no walls
     room_side : int         cells along each side of one room, so the board is
@@ -427,7 +459,8 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
     build, n_models = plan_determinized_models(
         num_humans=num_humans, obstacle_density=obstacle_density,
         rock_density=rock_density, seed=seed, visualize=visualize,
-        rooms_per_side=rooms_per_side, room_side=room_side, slip_prob=slip_prob)
+        rooms_per_side=rooms_per_side, room_side=room_side, slip_prob=slip_prob,
+        valuable_rocks=valuable_rocks)
     robot = build(0)
     humans = [build(i) for i in range(1, n_models)]
 
@@ -441,6 +474,7 @@ def generate_determinized_models(num_humans=3, obstacle_density=0.1,
                     f"of {room_side}x{room_side}")
         print(f"[rockworld] {geometry}, {size * size} cells, "
               f"obstacles={obstacle_density} rocks={rock_density} "
+              f"valuable={'density' if valuable_rocks is None else valuable_rocks} "
               f"humans={len(humans)}")
         print(f"  robot: {robot[0].shape[0]} states x {robot[0].shape[1]} actions "
               f"(determinized in {robot[3]:.4f}s)")

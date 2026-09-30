@@ -21,6 +21,7 @@ below is the paper's object under the name it goes by here:
     H2 dominance                build_dominance  — UNSOUND, see §7
     H3                          solve_query_mdp_proximity    (rule="static")
     H4 Query Frequency          solve_query_mdp_frequency    (rule="marginal")
+    Random baseline             solve_query_mdp_random       (rule="random")
 
 Two objects have no name in the paper and are easy to confuse, so they are
 spelled out under Notation below: **B_nofilter** against **B**, and **I_G**, the
@@ -53,16 +54,16 @@ Pipeline
                                                          → I          [Algorithm 1]
   4.  subsets_to_array(I, B)                             → I_array    bool (len_I_array, n)
   5.  one policy per condition — solve_query_mdp_exact (VI), _info_gain (H1),
-      _proximity (H3), _frequency (H4); build_dominance (H2) returns a mask, not
-      a policy, because H2 selects nothing                → §7
+      _proximity (H3), _frequency (H4), _random (Random); build_dominance (H2)
+      returns a mask, not a policy, because H2 selects nothing  → §7
   6.  evaluate_policy_on_real_human(...)                 → query count per episode
 
 B is what the robot may ask about, and the bit order every policy and I_array
 agree on.  It is sorted at step 1 and that order is kept to the end of the
 pipeline; it is never derived from I — see _bit_order().
 
-Step 6 also provides the random-order "query all" baseline (policy_network=None)
-and applies H2 (dominance=...), which is why the "X" and "X + H2" columns can
+Step 6 also takes policy_network=None for a random order of its own (experiment.py
+runs Random through solve_query_mdp_random instead), and applies H2 (dominance=...), which is why the "X" and "X + H2" columns can
 share one policy object.
 
 Notation
@@ -1187,14 +1188,22 @@ def _dominance_closure(T):
     return dom
 
 
+# GreedyQNet(rail=True)'s tier bias.  Finite on purpose:
+# evaluate_policy_on_real_human masks answered bottlenecks to -1e9, and a tier-3
+# action must still rank above those.  GreedyQNet returns float64 so that adding
+# it keeps the rule's ranking inside tiers 1 and 3: float32 resolves only 0.0625
+# at 1e6, which would turn most of those scores into ties.
+RAIL_BIAS = 1e6
+
+
 class GreedyQNet(nn.Module):
-    """The greedy query policies — H1, H3 and H4 — behind one callable
+    """The greedy query policies — H1, H3, H4 and Random — behind one callable
     interface, shared with ExactQNet so call sites need not tell them apart.
 
     Scores are recomputed from (K_I, K_not) on every forward(); there is no 3^n
     table, which is why these run on instances the exact solver cannot be built
-    for.  forward(x) takes (batch, 2n) and returns (batch, n) — the caller masks
-    already-queried actions and takes the argmax.
+    for.  forward(x) takes (batch, 2n) and returns (batch, n) float64 — the
+    caller masks already-queried actions and takes the argmax.
 
     rule
     ----
@@ -1202,29 +1211,62 @@ class GreedyQNet(nn.Module):
     "marginal" H4 — argmax_s |{ϕ ∈ Φ(B,K_I) : s ∈ ϕ}|.
     "static"   H3 — argmax_s score[s], a ranking fixed before the episode.
                     Unlike H1 and H4 this ignores Φ entirely.
+    "random"   Random — fresh uniform scores on every forward(), so each query
+                    is uniform among the unqueried bottlenecks.  `seed` seeds it.
+
+    rail
+    ----
+    False (default) — the rule alone.
+    True            — the rule inside provable guardrails, recomputed from
+                      (K_I, K_not) on every forward().  With C = {k : K_I ⊆ I_k},
+                      every unqueried bottleneck b falls into one of three tiers:
+
+      tier 1  b in NO I_k of C     -> ask first.  A YES leaves no compatible
+                                      hypothesis (failure); a NO is needed before
+                                      any I_k of C can be certified.  Never wasted.
+      tier 3  b in EVERY I_k of C  -> never ask.  Neither answer can move the
+                                      failure or the success test.
+      tier 2  everything else      -> the rule decides.
     """
 
-    def __init__(self, n, T, unique_B, B_to_idx, rule, static_score=None):
+    def __init__(self, n, T, unique_B, B_to_idx, rule, static_score=None,
+                 rail=False, seed=None):
         super().__init__()
         self.n, self.T = n, T
         self.unique_B, self.B_to_idx = unique_B, B_to_idx
         self.rule = rule
         self.static_score = static_score
+        self.rail = rail
+        self.rng = np.random.default_rng(seed)
 
-    def _consistent(self, KI, KN):
-        """(batch, len(I)) bool — hypotheses compatible with (K_I, K_not)."""
-        return (~(KI[:, None, :] & ~self.T[None, :, :]).any(2)      # K_I ⊆ ϕ
-                & ~(KN[:, None, :] &  self.T[None, :, :]).any(2))   # K_not ∩ ϕ = ∅
+    def _consistent(self, KI):
+        """(batch, len(I)) bool — Φ(B, K_I) = {ϕ : K_I ⊆ ϕ}, the set _terminal
+        and the exact VI keep alive.  K_not plays no part: the human only needs
+        I_G ⊆ ϕ, so a NO on a bit of ϕ says nothing against ϕ — only a YES
+        outside it does."""
+        return ~(KI[:, None, :] & ~self.T[None, :, :]).any(2)       # K_I ⊆ ϕ
+
+    def _rail_bias(self, KI, KN):
+        """(batch, n) additive bias: +RAIL_BIAS on tier 1, -RAIL_BIAS on tier 3."""
+        C         = self._consistent(KI)                          # (batch, len(I))
+        unqueried = ~(KI | KN)
+        alive     = C.any(1, keepdims=True)                       # no C: already failed
+        in_some   = (C[:, :, None] & self.T[None]).any(1)
+        in_all    = (~C[:, :, None] | self.T[None]).all(1)
+        tier1     = unqueried & alive & ~in_some
+        tier3     = unqueried & alive & in_all
+        return (tier1.astype(np.float64) - tier3) * RAIL_BIAS
 
     def forward(self, x):
         obs    = x.detach().cpu().numpy() > 0.5
-        n      = self.n
-        KI, KN = obs[:, :n], obs[:, n:]
+        KI     = obs[:, :self.n]
 
         if self.rule == "static":
             score = np.tile(self.static_score, (obs.shape[0], 1))
+        elif self.rule == "random":
+            score = self.rng.random((obs.shape[0], self.n))
         else:
-            C      = self._consistent(KI, KN).astype(np.float64)
+            C      = self._consistent(KI).astype(np.float64)
             n_plus = C @ self.T                                   # (batch, n)
             if self.rule == "marginal":
                 score = n_plus
@@ -1233,38 +1275,54 @@ class GreedyQNet(nn.Module):
                 n_min  = N - n_plus
                 score  = -(_xlog2x(n_plus) + _xlog2x(n_min)) / np.maximum(N, 1.0)
 
-        return torch.from_numpy(np.ascontiguousarray(score, dtype=np.float32)).to(x.device)
+        # Rounded through float32 first: the rule's own scores, and so every
+        # ranking without rails, stay exactly what they were when this returned
+        # float32.  Only the sum with RAIL_BIAS needs float64.
+        score = np.asarray(score, dtype=np.float32).astype(np.float64)
+        if self.rail:
+            score = score + self._rail_bias(KI, obs[:, self.n:])
+
+        return torch.from_numpy(np.ascontiguousarray(score)).to(x.device)
 
 
-# The four conditions.  C_Q / p_I / q_gamma / p_F / oracle are accepted for
+# The greedy conditions.  C_Q / p_I / q_gamma / p_F / oracle are accepted for
 # signature parity with solve_query_mdp_exact and are unused by the greedy
-# rules, which never evaluate the query MDP's rewards.
+# rules, which never evaluate the query MDP's rewards.  `rail` is GreedyQNet's:
+# the exact solver takes none, since its policy already respects the rails.
+
+def solve_query_mdp_random(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
+                           oracle: "Oracle | None" = None, rail=False, seed=None):
+    """Random — a uniformly random unqueried bottleneck at every query."""
+    unique_B, B_to_idx = _bit_order(I, B)
+    return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
+                      unique_B, B_to_idx, rule="random", rail=rail, seed=seed)
+
 
 def solve_query_mdp_info_gain(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
-                              oracle: "Oracle | None" = None):
+                              oracle: "Oracle | None" = None, rail=False):
     """Hypothesis 1 — one-step weighted-entropy minimisation over Φ(B, K_I)."""
     unique_B, B_to_idx = _bit_order(I, B)
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
-                      unique_B, B_to_idx, rule="entropy")
+                      unique_B, B_to_idx, rule="entropy", rail=rail)
 
 
 def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
-                              oracle: "Oracle | None" = None):
+                              oracle: "Oracle | None" = None, rail=False):
     """Hypothesis 4 — the bottleneck in the most currently consistent hypotheses."""
     unique_B, B_to_idx = _bit_order(I, B)
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
-                      unique_B, B_to_idx, rule="marginal")
+                      unique_B, B_to_idx, rule="marginal", rail=rail)
 
 
 def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
                               oracle: "Oracle | None" = None,
-                              positions=None, goal_state=None):
+                              positions=None, goal_state=None, rail=False):
     """Hypothesis 3 — Euclidean proximity: nearest the goal first.
 
     Pure distance, a ranking fixed before the episode that ignores I entirely.
     It does not sort B into "in no I_k / in some / in every I_k" tiers: those
-    are the rails, which experiment.py --rails applies to every rule alike
-    (rails.py), so H3 is compared with H1 and H4 on the same footing.  A
+    are the rails, which experiment.py --rails applies to every greedy rule alike
+    (GreedyQNet(rail=True)), so H3 is compared with H1 and H4 on the same footing.  A
     consequence worth knowing: goal_state, a bottleneck of every model, sits at
     distance 0 and is asked first although no answer about it can move either
     terminal test.
@@ -1316,7 +1374,8 @@ def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
 
     # Negated distance so that nearest the goal is asked first.
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
-                      unique_B, B_to_idx, rule="static", static_score=-dist)
+                      unique_B, B_to_idx, rule="static", static_score=-dist,
+                      rail=rail)
 
 def build_dominance(I, B):
     """Hypothesis 2(ii) — the dominance entailment b2 ∉ I_G ⇒ b1 ∉ I_G, where
