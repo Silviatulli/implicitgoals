@@ -50,11 +50,12 @@ Not every random map is usable, and a repetition *redraws* until it gets one tha
 is — a fresh seed, a fresh map, the previous one discarded.  Two conditions have
 to hold (see draw_instance_under_cap):
 
-    |B| <= --max-bottlenecks   affordable: Algorithm 1 is a 2^|B| search and the
-                               exact solver allocates 3^|B| knowledge states.
+    |B| <= --max-bottlenecks   only when that flag is given — no cap by default.
+                               A large |B| costs the VI baseline alone, and
+                               --max-exact-n skips it (NaN) rather than the map.
     |I| >= --min-hypotheses    interesting: with a single hypothesis there is
                                nothing to ask about, every rule stops at once and
-                               all five conditions tie at zero queries.
+                               all seven conditions tie at zero queries.
 
 So every configuration reports the full --num-simu repetitions.  The price is
 that the maps are sampled *conditioned* on both, which is not a neutral sample:
@@ -65,9 +66,9 @@ and 48.0 means 47 maps were built and thrown away for every one reported.
 Raising --humans therefore costs draws rather than repetitions.  Overcooked is
 barely affected — its bottlenecks come from recipes, not maps.
 
-Five conditions per repetition: the four selection rules (VI, H1 Info Gain,
-H3 Goal Proximity, H4 Query Frequency), plus the random-order "query all"
-control.
+Seven conditions per repetition: the six selection rules (VI, H1 Info Gain,
+H3 Goal Proximity, H4 Query Frequency, H4bis — H4 with argmin —, Ratio), plus the
+random-order "query all" control.  Ratio is policy_search's ratio_shared, under a homogeneous 1/2 prior.
 
 Writes two files into results/ , one row per combination:
     compute_times.csv   mean wall-clock time of every pipeline stage
@@ -128,7 +129,6 @@ from gridworld_core import (board_side, status_line, set_status_sink,
 
 # ── Shared, game-agnostic pipeline ───────────────────────────────────────────
 from bottlenecks import (
-    Oracle,
     remove_toboggan_redundancies,
     find_maximally_achievable_subsets,
     subsets_to_array,
@@ -140,6 +140,8 @@ from bottlenecks import (
     solve_query_mdp_info_gain,
     solve_query_mdp_proximity,
     solve_query_mdp_frequency,
+    solve_query_mdp_frequency_min,
+    solve_query_mdp_ratio,
     solve_query_mdp_random,
     GreedyQNet,
     get_reachable_states,
@@ -147,8 +149,9 @@ from bottlenecks import (
 )
 
 
-# Four selection rules plus the random-order control: five columns.
-BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
+# Six selection rules plus the random-order control: seven columns.
+BASES = ("strategic_exact", "info_gain", "proximity", "frequency",
+         "frequency_min", "ratio")
 
 # --rails adds a "+ rails" twin of Random and of every greedy rule: the same
 # GreedyQNet with rail=True (tier 1 first, tier 3 never, the rule among tier 2).
@@ -156,7 +159,8 @@ BASES = ("strategic_exact", "info_gain", "proximity", "frequency")
 # construction.  The twins are appended *after* every original column, so the
 # original columns are computed exactly as without the flag: same policies, same
 # human, same random order.
-RAIL_BASES = ("query_all", "info_gain", "proximity", "frequency")
+RAIL_BASES = ("query_all", "info_gain", "proximity", "frequency",
+              "frequency_min", "ratio")
 
 
 def conditions_for(use_rails=False):
@@ -180,6 +184,8 @@ BASE_LABELS = {
     "info_gain":       "H1 Info Gain",
     "proximity":       "H3 Goal Proximity",
     "frequency":       "H4 Query Frequency",
+    "frequency_min":   "H4bis Min Frequency",
+    "ratio":           "Ratio",
 }
 CONDITION_LABELS = {"query_all": "Random"}
 for _b, _lab in BASE_LABELS.items():
@@ -321,8 +327,8 @@ def compute_bottleneck_sets(T_R, T_H_list, start_state, goal_state,
     re-timed inside run_instance.
 
     Returns (oracle_sets, B_nofilter, B, stage_times)
-      oracle_sets  one frozenset per candidate human — the Oracle's ensemble, and
-                   the pool the evaluated human is drawn from
+      oracle_sets  one frozenset per candidate human — the pool the evaluated
+                   human is drawn from
       B_nofilter   their union, before the toboggan filter
       B            the query set: what the robot may ask about, and the bit order
                    every policy and I_array agree on.  Equal to B_nofilter unless
@@ -500,12 +506,13 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
     Two constraints, tested in this order because the second is far more
     expensive than the first:
 
-      1. ``len(B) <= max_bottlenecks`` — affordability.  Algorithm 1 is a 2^|B|
-         DFS and the exact solver allocates 3^|B| knowledge states, so an
-         oversized query set has to be rejected *before* either runs.
+      1. ``len(B) <= max_bottlenecks`` — affordability, and only when
+         --max-bottlenecks is given: by default it is infinite and never binds.
+         It is tested first so an oversized query set is rejected before
+         Algorithm 1 runs.
       2. ``len(I) >= min_hypotheses`` — interest.  A repetition with one
          hypothesis poses no question at all: I_hat is already inside the only
-         I_k, every rule terminates at once, and all five conditions tie at zero
+         I_k, every rule terminates at once, and all seven conditions tie at zero
          queries.  Those instances say nothing about which rule is better, so
          they are drawn past rather than reported.
 
@@ -587,7 +594,8 @@ def draw_instance_under_cap(game, room_side, num_humans, seed, args,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
-                 max_exact_n=17, filter_toboggans=False, max_bottlenecks=17,
+                 max_exact_n=17, filter_toboggans=False,
+                 max_bottlenecks=float("inf"),
                  bottleneck_bundle=None, use_rails=False):
     """Run the whole pipeline once on one instance and time every stage.
 
@@ -616,13 +624,12 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         stage should run twice.  None recomputes both, which is the standalone
         path for running one instance with no redraw loop around it.
 
-    max_bottlenecks : int
-        Abandon the repetition when the query set is larger than this.
-        Algorithm 1 is an include/exclude DFS over 2^|B| subsets, so a model that
-        produces many bottlenecks can stall the whole sweep.  Under main() this
-        is unreachable — draw_instance_under_cap redraws until the instance fits,
-        so run_instance is only ever handed one that already passed — and it
-        stays as the guard on the standalone path.
+    max_bottlenecks : int or float("inf")
+        Abandon the repetition when the query set is larger than this.  Infinite
+        by default: a large |B| only skips the VI baseline, through max_exact_n.
+        Under main() this is unreachable — draw_instance_under_cap redraws until
+        the instance fits, so run_instance is only ever handed one that already
+        passed — and it stays as the guard on the standalone path.
 
     filter_toboggans : bool
         Run remove_toboggan_redundancies between B_nofilter and Algorithm 1.
@@ -688,9 +695,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         oracle_sets, B_nofilter, B, I, stage_times = bottleneck_bundle
     row.update(stage_times)
 
-    # Safety valve: bail out before Algorithm 1 rather than after, since it is
-    # the 2^|B| stage that would hang.  Unreachable under main(), which redraws
-    # until the instance fits; this is the standalone path's guard.
+    # Safety valve, only when a cap is set: bail out before Algorithm 1 rather
+    # than after.  Unreachable under main(), which redraws until the instance
+    # fits; this is the standalone path's guard.
     if len(B) > max_bottlenecks:
         tqdm.write(f"skipping repetition: {len(B)} bottlenecks > {max_bottlenecks}")
         row.update({"n_B_nofilter": len(B_nofilter), "n_B": len(B),
@@ -727,10 +734,9 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         row["skipped"] = "no bottlenecks"
         return row, {c: float("nan") for c in conditions}, float("nan")
 
-    # Empirical P(YES | b) = fraction of candidate humans owning b, taken from the
-    # very ensemble the evaluated human is drawn from below.  Without it the
-    # solver assumes a uniform 50/50 prior over every bottleneck.
-    oracle = Oracle(oracle_sets, n_states=max(int(T_R.shape[0]), int(goal_state) + 1))
+    # Every policy works under the homogeneous prior P(YES | s) = 1/2: none is
+    # given the candidate humans' marginals, so the VI and Ratio see only Φ and B,
+    # like the other rules.
 
     # ── Build one policy per selection rule ─────────────────────────────────
     # Each t_solve_* below is what that condition would cost *run on its own*.
@@ -738,8 +744,8 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     # max_exact_n gates the VI baseline *alone*, because solve_query_mdp_exact
     # allocates 3^n knowledge states while the greedy rules cost microseconds at
     # any n — skipping them alongside it would hide the regime they are for.
-    # (max_bottlenecks is the other kind of cap: I is needed by every condition,
-    # so exceeding it skips the repetition whole.)
+    # (max_bottlenecks, off by default, is the other kind of cap: I is needed by
+    # every condition, so exceeding it skips the repetition whole.)
     policies, base_solve = {}, {}
     if n > max_exact_n:
         policies["strategic_exact"]   = None
@@ -750,14 +756,16 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     else:
         t0 = time.perf_counter()
         with _quiet():
-            policies["strategic_exact"] = solve_query_mdp_exact(I, B, oracle=oracle)
+            policies["strategic_exact"] = solve_query_mdp_exact(I, B)
         base_solve["strategic_exact"] = time.perf_counter() - t0
 
     for name, solver in (("info_gain", solve_query_mdp_info_gain),
-                         ("frequency", solve_query_mdp_frequency)):
+                         ("frequency", solve_query_mdp_frequency),
+                         ("frequency_min", solve_query_mdp_frequency_min),
+                         ("ratio", solve_query_mdp_ratio)):
         t0 = time.perf_counter()
         with _quiet():
-            policies[name] = solver(I, B, oracle=oracle)
+            policies[name] = solver(I, B)
         base_solve[name] = time.perf_counter() - t0
 
     # H3 ranks bottlenecks by straight-line distance to the goal, so building it
@@ -772,7 +780,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
             positions = {i: tuple(s[0])
                          for i, s in enumerate(mdp_R.get_state_space())}
             policies["proximity"] = solve_query_mdp_proximity(
-                I, B, oracle=oracle, positions=positions,
+                I, B, positions=positions,
                 goal_state=int(goal_state))
         else:
             # Overcooked has no geometry — a state is a bit-packed (inventory,
@@ -842,7 +850,7 @@ def _with_rails(policy):
 def _query_episode(policy, oracle_bottlenecks, I_array, b_to_int):
     """Queries one episode needs against the human owning `oracle_bottlenecks`.
 
-    `policy` is Random or one of the four selection rules.
+    `policy` is Random or one of the six selection rules.
     """
     with _quiet():
         res = evaluate_policy_on_real_human(
@@ -1095,39 +1103,37 @@ def parse_args(argv=None):
                         "provable guardrails (GreedyQNet rail=True): tier-1 "
                         "bottlenecks (in no compatible hypothesis) asked first, "
                         "tier-3 (in every compatible hypothesis) never.  The VI "
-                        "baseline has them by construction.  Adds four '+ rails' "
+                        "baseline has them by construction.  Adds six '+ rails' "
                         "columns and leaves the others unchanged (default: off)")
 
     # ── Cost ceilings ────────────────────────────────────────────────────────
     # Maintainer's note, deliberately not in the help text below: it is about the
     # two default *values*, so its reader is whoever edits them.
     #
-    # The two caps guard different stages: --max-bottlenecks guards Algorithm 1,
-    # a 2^n DFS (2^17 = 131k subsets, cheap); --max-exact-n guards the exact Query
-    # MDP, which allocates 3^n knowledge states.  Keep them equal.  An instance
-    # that clears the first can then always be solved exactly, so every column is
-    # averaged over the same repetitions.  Were the first the larger of the two, a
-    # repetition could pass Algorithm 1 and then have its VI baseline skipped, and
-    # that column alone would average over a subset of the others.
+    # The two caps guard different stages: --max-bottlenecks rejects the map
+    # before Algorithm 1 (a maximal-clique enumeration, cheap in practice);
+    # --max-exact-n skips the exact Query MDP alone, which allocates 3^n knowledge
+    # states.  Only the second is on by default: a map with a large |B| is kept,
+    # every greedy rule runs on it, and the VI column is NaN there.  So the VI
+    # column averages over the repetitions with |B| <= --max-exact-n only, and
+    # the paired comparisons against it (saved_queries) over those too.  Pass
+    # --max-bottlenecks equal to --max-exact-n to get every column over the same
+    # repetitions again, at the price of redrawing the maps it rejects.
     #
-    # Both are sized so Overcooked never redraws at the default MDP: over 160
-    # instances (40 seeds x 5/10/20/30 humans) the toboggan filter put |B| in
-    # 4..17, so 17 is the observed ceiling.  It is expensive — one n=17 solve
-    # costs ~29 s and ~4.7 GB peak against ~0.08 s at n=13 — so lower
-    # --max-bottlenecks to trade draws for speed.
+    # One n=17 solve costs ~29 s and ~4.7 GB peak against ~0.08 s at n=13.
     #
     # Do not raise --max-exact-n to 18 without testing it alone first: 3^18
     # extrapolates to ~14 GB.  And --overcooked-allow-drop roughly doubles the
     # filtered set (~36), which no cap value brings back into reach — there the
     # redraw loop cannot help either, since every draw busts the cap.
-    p.add_argument("--max-bottlenecks", type=int, default=17,
+    p.add_argument("--max-bottlenecks", type=int, default=None,
                    help="redraw an instance whose query set exceeds this, "
-                        "measured after the toboggan filter; Algorithm 1 is a "
-                        "2^|B| search (default: 17)")
+                        "measured after the toboggan filter (default: no cap — "
+                        "--max-exact-n skips only the VI baseline instead)")
     p.add_argument("--min-hypotheses", type=int, default=3,
                    help="redraw an instance whose hypothesis space is smaller "
                         "than this.  |I| = 1 poses no question — every rule "
-                        "terminates immediately and all five conditions tie — so "
+                        "terminates immediately and all seven conditions tie — so "
                         "such repetitions measure nothing; raising this costs "
                         "draws, and the raw |I| distribution is dominated by 1 "
                         "(default: 3)")
@@ -1160,6 +1166,8 @@ def parse_args(argv=None):
                         "Results do not depend on this: a repetition is a pure "
                         "function of its seed (default: 0)")
     args = p.parse_args(argv)
+    if args.max_bottlenecks is None:       # no cap: a comparison never binds
+        args.max_bottlenecks = float("inf")
     # Past MAX_INSTANCE_TRIES the retry seeds would overflow numpy's 32 bits
     # (see RETRY_SEED_STRIDE).
     if not 1 <= args.max_draws <= MAX_INSTANCE_TRIES:
@@ -1335,12 +1343,13 @@ def main(argv=None):
                                                query_fields)
     query_plot_paths, times_plot_path = _make_plots(time_rows, query_rows,
                                                     args.out_dir, conditions)
-    tables_path = write_tables(episodes_path, query_rows, time_rows,
-                               args.out_dir, conditions)
+    means_path, variance_path = write_tables(episodes_path, query_rows,
+                                             time_rows, args.out_dir, conditions)
 
     print(f"\n{len(time_rows)} configurations x {args.num_simu} repetitions")
     print(f"  per-episode results -> {episodes_path}")
-    print(f"  summary tables      -> {tables_path}")
+    print(f"  mean queries table  -> {means_path}")
+    print(f"  variance table      -> {variance_path}")
     for path in query_plot_paths:
         print(f"  query counts plot   -> {path}")
     print(f"  compute times plot  -> {times_plot_path}")
@@ -1521,7 +1530,7 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
     query_counts_h<H>.png   one figure per number of humans, one subplot per
                         game in it — 2x2 for the four grid games, one row of
                         up to three otherwise.  Each subplot opens with |B|,
-                        then one bar per condition: Random and the four
+                        then one bar per condition: Random and the six
                         selection rules, "+ rails" twins hatched.
                         Per-game subplots rather than one shared axis because
                         the games differ by an order of magnitude in |B|, and
@@ -1582,7 +1591,7 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
         pair_handles.append(shades if len(shades) > 1 else shades[0])
         pair_labels.append(CONDITION_LABELS[b])
     variants = ["rule alone"] + (["+ rails (hatched)"] if with_rails else [])
-    rules = ("four selection rules"
+    rules = ("six selection rules"
              + (", Random and the greedy rules with and without rails"
                 if with_rails else ""))
 
@@ -1626,8 +1635,8 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
             # Headroom above the tallest error bar keeps the box off the bars.
             ax.set_ylim(top=ax.get_ylim()[1] * 1.22)
             ax.text(0.98, 0.97,
-                    f"|I| = {r['n_I_mean']:.1f} ± {r['n_I_std']:.1f}\n"
-                    f"mean |I_k| = {r['len_I_mean']:.1f} ± {r['len_I_std']:.1f}",
+                    rf"$|\Phi|$ = {r['n_I_mean']:.1f} ± {r['n_I_std']:.1f}" "\n"
+                    rf"mean $|\phi_k|$ = {r['len_I_mean']:.1f} ± {r['len_I_std']:.1f}",
                     transform=ax.transAxes, ha="right", va="top", fontsize=8,
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                               edgecolor="0.7", linewidth=0.6))
@@ -1703,12 +1712,14 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _levene_rows(episodes, a="strategic_exact", b="info_gain"):
-    """Levene's test on the raw per-episode query counts, one row per domain.
+    """Levene's test on the raw per-episode query counts, one row per
+    configuration (game x board x humans), in the order of episodes.csv.
 
-    Pools the human counts, so each sample is num_simu x |--humans| episodes.
-    The test needs the individual episodes, which is why it lives here and not
-    in the aggregate view: means and standard deviations are not enough to run
-    it.
+    Each sample is that configuration's num_simu episodes, NaNs left out: the
+    repetitions that found no map, and for `a` those whose VI was skipped.  A
+    configuration with fewer than 3 in either sample gets no row.  The test needs
+    the individual episodes, which is why it lives here and not in the aggregate
+    view: means and standard deviations are not enough to run it.
 
     Levene with the median (Brown-Forsythe) rather than an F-test, because query
     counts are discrete and far from normal, which is exactly the case Levene is
@@ -1724,95 +1735,83 @@ def _levene_rows(episodes, a="strategic_exact", b="info_gain"):
         levene = None
 
     rows = []
-    for game, sub in episodes.groupby("game", sort=False):
+    for (game, board, hum), sub in episodes.groupby(
+            ["game", "board_side", "num_humans"], sort=False, dropna=False):
         x = sub[a].dropna().to_numpy()
         y = sub[b].dropna().to_numpy()
         if len(x) < 3 or len(y) < 3:
             continue
         var_x, var_y = x.var(ddof=1), y.var(ddof=1)
         p = "" if levene is None else f"{levene(x, y, center='median')[1]:.3e}"
-        rows.append([game, int(sub.n_states.iloc[0]), len(x),
+        # n_states is NaN on a repetition that found no map; x and y being
+        # non-empty guarantees another one did.
+        rows.append([game, "" if pd.isna(board) else int(board), int(hum),
+                     int(sub.n_states.dropna().iloc[0]), len(x),
                      round(var_x, 3), round(var_y, 3),
                      round(var_y / var_x, 2) if var_x else "", p])
-    return sorted(rows, key=lambda r: r[1])
+    return rows
 
 
 def write_tables(episodes_path, query_rows, time_rows, out_dir, conditions):
-    """Write results/tables.csv: the two summary tables, one above the other.
+    """Write the two summary tables, one CSV each, named after the table.
 
-    Plain CSV so it opens in a spreadsheet and reads in a terminal, with a `#`
-    line naming each table.  Both are *views* of episodes.csv and are rebuilt
-    from it every time, so they cannot drift from the data they describe.
+    mean_queries.csv    one row per configuration, the same columns as the
+                        summary printed at the end of the run (plus |Phi|): the
+                        mean query count of every condition, and the time.
+                        Every column that is a mean over the repetitions reads
+                        "mean ± std", the std being the population one (ddof=0)
+                        over the same repetitions, NaNs left out.
+    query_variance.csv  per configuration, the variance of the query count, VI
+                        against H1, with Levene's median-centred p-value
+                        (ratio > 1: H1 varies more).  Needs >= 3 episodes per
+                        configuration, so a run with --num-simu < 3 writes the
+                        header alone.
 
-    Table 1 — mean queries per condition.  Grid domains as a range across the
-    four, Overcooked on its own, since the four grids agree closely and the
-    range is what the paper reports.  |B| and |Phi| are included because both
-    are observed rather than set: instances are redrawn until |B| <=
-    --max-bottlenecks and |Phi| >= --min-hypotheses, so every mean is
-    conditioned on that screen.
-
-    Table 2 — variance of the query count, Str.VI against Info Gain, with
-    Levene's p-value.
+    Both are views of episodes.csv, rebuilt from it every time.  Returns the
+    two paths.
     """
-    episodes = pd.read_csv(episodes_path)
-    q = pd.DataFrame(query_rows)
-    t = pd.DataFrame(time_rows)
-    m = q.merge(t[["game", "num_humans", "n_B", "n_I"]], on=["game", "num_humans"])
-    grid = m[m.game != "overcooked"]
-    over = m[m.game == "overcooked"]
-    humans = sorted(m.num_humans.unique())
-    named = [c for c in conditions]
+    def pm(mean, std):
+        return "" if pd.isna(mean) else f"{mean:.2f} ± {std:.2f}"
 
-    def rng(sub, cond):
-        return f"{sub[cond + '_mean'].min():.2f}-{sub[cond + '_mean'].max():.2f}"
+    short = _short_names()
+    rows = []
+    for row, q in zip(time_rows, query_rows):
+        rows.append({"game": row["game"], "board": row["board_side"],
+                     "hum": row["num_humans"],
+                     "|B|": pm(q["n_B_mean"], q["n_B_std"]),
+                     "|Phi|": pm(q["n_I_mean"], q["n_I_std"]),
+                     **{short[c]: pm(q[f"{c}_mean"], q[f"{c}_std"])
+                        for c in conditions},
+                     "time(s)": pm(row["t_total"], row["t_total_std"]),
+                     # why a configuration has no episode at all
+                     "skipped": "" if q["n_episodes"] else row["skipped"]})
+    means = pd.DataFrame(rows)
+    if not means["skipped"].any():
+        means = means.drop(columns="skipped")
+    means_path = os.path.join(out_dir, "mean_queries.csv")
+    means.to_csv(means_path, index=False)
 
-    path = os.path.join(out_dir, "tables.csv")
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        n_simu = int(m.num_simu.iloc[0])
-        # No commas inside these header lines: one cell holding commas is
-        # re-split by anything reading the file as CSV, including `column -s,`.
-        w.writerow([f"# TABLE 1 - mean queries until the human's subgoal set is "
-                    f"identified ({n_simu} repetitions per configuration). "
-                    f"Grid rows give the range across the four grid domains. "
-                    f"|B| and |Phi| are observed rather than set."])
-        w.writerow(["Domain", "Humans", "|B|", "|Phi|"]
-                   + [CONDITION_LABELS[c] for c in named])
-        for h in humans:
-            s = grid[grid.num_humans == h]
-            if len(s):
-                w.writerow(["Grid family", h,
-                            f"{s.n_B.min():.1f}-{s.n_B.max():.1f}",
-                            f"{s.n_I.min():.1f}-{s.n_I.max():.1f}"]
-                           + [rng(s, c) for c in named])
-        for h in humans:
-            s = over[over.num_humans == h]
-            if len(s):
-                r = s.iloc[0]
-                # "n/a" rather than an empty cell: H3 ranks by distance to the
-                # goal and Overcooked has no geometry, which is a fact about the
-                # game and not a missing measurement.
-                w.writerow(["Overcooked", h, f"{r.n_B:.1f}", f"{r.n_I:.1f}"]
-                           + [("n/a" if pd.isna(r[c + "_mean"]) else
-                               f"{r[c + '_mean']:.2f} +/- {r[c + '_std']:.2f}")
-                              for c in named])
+    variance = pd.DataFrame(
+        _levene_rows(pd.read_csv(episodes_path)),
+        columns=["game", "board", "hum", "states", "n", "var VI", "var H1",
+                 "ratio", "Levene p"])
+    variance_path = os.path.join(out_dir, "query_variance.csv")
+    variance.to_csv(variance_path, index=False)
+    return means_path, variance_path
 
-        w.writerow([])
-        w.writerow(["# TABLE 2 - variance of the query count (VI baseline vs "
-                    "Info Gain) by Levene's median-centred test on the raw "
-                    "per-episode counts. Ratio > 1 means Info Gain varies more."])
-        w.writerow(["Domain", "States", "n episodes", "var (VI)",
-                    "var (Info Gain)", "ratio", "Levene p"])
-        for row in _levene_rows(episodes):
-            w.writerow(row)
-    return path
+
+def _short_names():
+    """Condition -> the short column name of the end-of-run summary."""
+    short = {"query_all": "rand", "strategic_exact": "VI", "info_gain": "H1",
+             "proximity": "H3", "frequency": "H4", "frequency_min": "H4b",
+             "ratio": "Rat"}
+    short.update({f"{b}_rails": f"{short[b]}+R" for b in RAIL_BASES})
+    return short
 
 
 def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
     """One line per configuration — everything shown is a mean over num_simu."""
-    short = {"query_all": "rand", "strategic_exact": "VI", "info_gain": "H1",
-             "proximity": "H3", "frequency": "H4"}
-    short.update({f"{b}_rails": f"{short[b]}+R" for b in RAIL_BASES})
+    short = _short_names()
     header = "".join(f"{short[c]:>8}" for c in conditions)
     print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B|':>7}{header}{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):

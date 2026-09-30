@@ -21,7 +21,9 @@ below is the paper's object under the name it goes by here:
     H2 dominance                build_dominance  — UNSOUND, see §7
     H3                          solve_query_mdp_proximity    (rule="static")
     H4 Query Frequency          solve_query_mdp_frequency    (rule="marginal")
+    H4bis (H4, argmin)          solve_query_mdp_frequency_min (rule="marginal_min")
     Random baseline             solve_query_mdp_random       (rule="random")
+    Ratio (policy_search/)      solve_query_mdp_ratio        (rule="ratio")
 
 Two objects have no name in the paper and are easy to confuse, so they are
 spelled out under Notation below: **B_nofilter** against **B**, and **I_G**, the
@@ -54,7 +56,8 @@ Pipeline
                                                          → I          [Algorithm 1]
   4.  subsets_to_array(I, B)                             → I_array    bool (len_I_array, n)
   5.  one policy per condition — solve_query_mdp_exact (VI), _info_gain (H1),
-      _proximity (H3), _frequency (H4), _random (Random); build_dominance (H2)
+      _proximity (H3), _frequency (H4), _frequency_min (H4bis), _ratio,
+      _random (Random); build_dominance (H2)
       returns a mask, not a policy, because H2 selects nothing  → §7
   6.  evaluate_policy_on_real_human(...)                 → query count per episode
 
@@ -1197,8 +1200,8 @@ RAIL_BIAS = 1e6
 
 
 class GreedyQNet(nn.Module):
-    """The greedy query policies — H1, H3, H4 and Random — behind one callable
-    interface, shared with ExactQNet so call sites need not tell them apart.
+    """The greedy query policies — H1, H3, H4, Ratio and Random — behind one
+    callable interface, shared with ExactQNet so call sites need not tell them apart.
 
     Scores are recomputed from (K_I, K_not) on every forward(); there is no 3^n
     table, which is why these run on instances the exact solver cannot be built
@@ -1209,10 +1212,27 @@ class GreedyQNet(nn.Module):
     ----
     "entropy"  H1 — argmin_s Σ_± (n_±/N)·log2 n_±  over consistent hypotheses.
     "marginal" H4 — argmax_s |{ϕ ∈ Φ(B,K_I) : s ∈ ϕ}|.
+    "marginal_min" H4bis — the same count, argmin instead of argmax.
     "static"   H3 — argmax_s score[s], a ranking fixed before the episode.
                     Unlike H1 and H4 this ignores Φ entirely.
     "random"   Random — fresh uniform scores on every forward(), so each query
                     is uniform among the unqueried bottlenecks.  `seed` seeds it.
+    "ratio"    ratio_shared of policy_search/ — certify rather than identify.
+                    For each alive k, U_k = (B ∖ I_k) ∖ K_not is what I_k still
+                    needs answered NO; with U_k sorted by decreasing p,
+                      P_k = Π (1 − p_s)            P(all of U_k is NO)
+                      E_k = Σ_i Π_{j<i} (1 − p_j)  expected queries, fail-fast
+                    The target is k* = argmax P_k / E_k, and the query is the
+                    bit of U_{k*} lying in the largest ratio-weighted mass of
+                    alive U_k — a NO on it advances all of those — ties broken
+                    by p.  If every alive P_k is 0 (some p_s = 1), it falls back
+                    to policy_search's QValue.  O(|I|·n log n) per query.
+
+    p
+    -
+    (n,) prior P(YES | s), read by "ratio" only.  None (default) is the
+    homogeneous 1/2, under which "ratio" needs nothing beyond Φ and B, like H1:
+    the target is then the alive I_k with the fewest bits left to certify.
 
     rail
     ----
@@ -1230,7 +1250,7 @@ class GreedyQNet(nn.Module):
     """
 
     def __init__(self, n, T, unique_B, B_to_idx, rule, static_score=None,
-                 rail=False, seed=None):
+                 rail=False, seed=None, p=None):
         super().__init__()
         self.n, self.T = n, T
         self.unique_B, self.B_to_idx = unique_B, B_to_idx
@@ -1238,6 +1258,8 @@ class GreedyQNet(nn.Module):
         self.static_score = static_score
         self.rail = rail
         self.rng = np.random.default_rng(seed)
+        self.p = (np.full(n, 0.5) if p is None
+                  else np.clip(np.asarray(p, dtype=np.float64), 0.0, 1.0))
 
     def _consistent(self, KI):
         """(batch, len(I)) bool — Φ(B, K_I) = {ϕ : K_I ⊆ ϕ}, the set _terminal
@@ -1257,11 +1279,50 @@ class GreedyQNet(nn.Module):
         tier3     = unqueried & alive & in_all
         return (tier1.astype(np.float64) - tier3) * RAIL_BIAS
 
+    def _ratio_shared(self, KI, KN):
+        """(batch, n) scores of the "ratio" rule: the chosen bit scores highest.
+
+        A batched port of policy_search/policies.py's Ratio(within="shared"),
+        with its QValue fallback.  Bits outside U_{k*} get -1e8 — below every
+        target bit, above the -1e9 of a queried one even with a rail bias."""
+        C  = self._consistent(KI)                                 # (b, m) alive
+        U  = C[:, :, None] & ~self.T[None] & ~KN[:, None, :]      # (b, m, n)
+        p  = self.p
+
+        # P_k and E_k, each U_k in fail-fast order (decreasing p).
+        q     = -np.sort(-np.where(U, p, -1.0), axis=2)           # masked last
+        valid = q >= 0
+        surv  = np.cumprod(np.where(valid, 1.0 - q, 1.0), axis=2)
+        P     = surv[..., -1]
+        E     = 1.0 + (surv[..., :-1] * valid[..., 1:]).sum(2)
+        ratio = np.where(C, P / E, 0.0)
+
+        k     = np.where(C, ratio, -np.inf).argmax(1)             # target k*
+        mass  = np.einsum("bmn,bm->bn", U, ratio)
+        rows  = np.arange(len(KI))
+        score = np.where(U[rows, k], mass + 1e-9 * p, -1e8)
+
+        # Fallback: the prior says no alive term can succeed.
+        fall = ~(ratio > 0).any(1)
+        if fall.any():
+            r      = U.sum(2)                                     # (b, m)
+            big    = C & (r > 1)
+            logf   = np.where(big, np.log1p(-1.0 / np.maximum(r, 2)), 0.0)
+            rho    = np.exp(np.einsum("bmn,bm->bn", U & big[..., None], logf))
+            rho[(U & (C & ~big)[..., None]).any(1)] = 0.0
+            na     = np.maximum(C.sum(1, keepdims=True), 1)
+            a_yes  = C.astype(np.float64) @ self.T
+            dist   = p * a_yes / na + (1.0 - p) * rho
+            score[fall] = -dist[fall]
+        return score
+
     def forward(self, x):
         obs    = x.detach().cpu().numpy() > 0.5
         KI     = obs[:, :self.n]
 
-        if self.rule == "static":
+        if self.rule == "ratio":
+            score = self._ratio_shared(KI, obs[:, self.n:])
+        elif self.rule == "static":
             score = np.tile(self.static_score, (obs.shape[0], 1))
         elif self.rule == "random":
             score = self.rng.random((obs.shape[0], self.n))
@@ -1270,6 +1331,8 @@ class GreedyQNet(nn.Module):
             n_plus = C @ self.T                                   # (batch, n)
             if self.rule == "marginal":
                 score = n_plus
+            elif self.rule == "marginal_min":
+                score = -n_plus
             else:
                 N      = C.sum(1, keepdims=True)
                 n_min  = N - n_plus
@@ -1277,8 +1340,10 @@ class GreedyQNet(nn.Module):
 
         # Rounded through float32 first: the rule's own scores, and so every
         # ranking without rails, stay exactly what they were when this returned
-        # float32.  Only the sum with RAIL_BIAS needs float64.
-        score = np.asarray(score, dtype=np.float32).astype(np.float64)
+        # float32.  Only the sum with RAIL_BIAS needs float64.  Not "ratio",
+        # which is new and whose 1e-9·p tie-break float32 would erase.
+        if self.rule != "ratio":
+            score = np.asarray(score, dtype=np.float32).astype(np.float64)
         if self.rail:
             score = score + self._rail_bias(KI, obs[:, self.n:])
 
@@ -1312,6 +1377,27 @@ def solve_query_mdp_frequency(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
     unique_B, B_to_idx = _bit_order(I, B)
     return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
                       unique_B, B_to_idx, rule="marginal", rail=rail)
+
+
+def solve_query_mdp_frequency_min(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99,
+                                  p_F=0.0, oracle: "Oracle | None" = None,
+                                  rail=False):
+    """Hypothesis 4bis — H4 reversed: the bottleneck in the fewest currently
+    consistent hypotheses."""
+    unique_B, B_to_idx = _bit_order(I, B)
+    return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
+                      unique_B, B_to_idx, rule="marginal_min", rail=rail)
+
+
+def solve_query_mdp_ratio(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,
+                          oracle: "Oracle | None" = None, rail=False, p=None):
+    """ratio_shared — certify the most profitable alive hypothesis; see
+    GreedyQNet.  `p` is the prior P(YES | s) in B's order, None for a
+    homogeneous 1/2.  `oracle` is ignored like for every greedy rule: pass
+    oracle.probs_for_raw_ids(B) as `p` to use the Oracle's marginals."""
+    unique_B, B_to_idx = _bit_order(I, B)
+    return GreedyQNet(len(unique_B), _hypothesis_matrix(I, B_to_idx),
+                      unique_B, B_to_idx, rule="ratio", rail=rail, p=p)
 
 
 def solve_query_mdp_proximity(I, B, C_Q=-10.0, p_I=1.0, q_gamma=0.99, p_F=0.0,

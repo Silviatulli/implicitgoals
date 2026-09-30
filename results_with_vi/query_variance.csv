@@ -1,0 +1,5 @@
+game,board,hum,states,n,var VI,var H1,ratio,Levene p
+gridworld,25,20,625,50,0.816,11.849,14.51,3.063e-08
+puddleworld,25,20,625,50,1.13,17.21,15.23,4.173e-15
+rockworld,25,20,1250,45,2.056,15.982,7.77,8.073e-06
+taxiworld,25,20,1875,12,0.811,9.879,12.19,4.018e-02

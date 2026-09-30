@@ -1,0 +1,24 @@
+date     2026-09-30T13:20:03
+host     Macmini.lan
+command  uv run python experiment.py --humans 100 --num-simu 50 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --out-dir results_big_grid
+
+resolved arguments (defaults included):
+  --games                  ['gridworld', 'puddleworld', 'rockworld', 'taxiworld']
+  --humans                 [100]
+  --jobs                   0
+  --max-bottlenecks        inf
+  --max-draws              20
+  --max-exact-n            17
+  --min-hypotheses         3
+  --num-simu               50
+  --obstacle-density       0.05
+  --out-dir                results_big_grid
+  --overcooked-allow-drop  False
+  --puddle-density         0.1
+  --rails                  True
+  --rock-density           0.1
+  --room-sides             [10]
+  --rooms-per-side         10
+  --seed                   0
+  --slip-prob              0.0
+  --valuable-rocks         3
