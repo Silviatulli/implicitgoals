@@ -15,4 +15,6 @@ from_h1_h2.py
 
 todo.md
 
-big_Q_games/drafts/
+big_Q_games/
+policy_search/
+tmp_policy_search/
