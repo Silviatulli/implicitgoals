@@ -1,6 +1,0 @@
-# TABLE 1 - mean queries until the human's subgoal set is identified (8 repetitions per configuration). Grid rows give the range across the four grid domains. |B| and |Phi| are observed rather than set.
-Domain,Humans,|B|,|Phi|,Random,VI baseline,H1 Info Gain,H3 Goal Proximity,H4 Query Frequency,Random + rails,VI baseline + rails,H1 Info Gain + rails,H3 Goal Proximity + rails,H4 Query Frequency + rails
-Grid family,30,19.9-43.0,6.5-9.1,15.12-30.12,nan-nan,11.75-31.75,15.00-30.38,13.38-32.00,8.00-12.50,nan-nan,7.50-12.12,9.75-14.12,9.00-12.88
-
-# TABLE 2 - variance of the query count (VI baseline vs Info Gain) by Levene's median-centred test on the raw per-episode counts. Ratio > 1 means Info Gain varies more.
-Domain,States,n episodes,var (VI),var (Info Gain),ratio,Levene p
