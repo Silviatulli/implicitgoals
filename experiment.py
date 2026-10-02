@@ -70,6 +70,15 @@ Seven conditions per repetition: the six selection rules (VI, H1 Info Gain,
 H3 Goal Proximity, H4 Query Frequency, H4bis — H4 with argmin —, Ratio), plus the
 random-order "query all" control.  Ratio is policy_search's ratio_shared, under a homogeneous 1/2 prior.
 
+Beside them, every repetition records the clairvoyant bound L* of
+policy_search/ and RATIO.md: the fewest queries any policy could have needed
+against the drawn human had it known that human's I_G (see
+bottlenecks.clairvoyant_bound).  It is not a condition — it reads the answers,
+which no rule is given — but the floor under every condition, "+ rails" twins
+included, episode by episode.  It is the "clairvoyant_bound" column of
+episodes.csv and "L*" in mean_queries.csv, and the query plots draw it next to
+|B| and as a dashed line across the rules.
+
 Writes two files into results/ , one row per combination:
     compute_times.csv   mean wall-clock time of every pipeline stage
     query_counts.csv    mean query count, one column per condition
@@ -103,6 +112,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.legend_handler import HandlerTuple
+from matplotlib.lines import Line2D
 from tqdm import tqdm
 
 # ── Benchmark domains ─────────────────────────────────────────────────────────
@@ -146,6 +156,8 @@ from bottlenecks import (
     GreedyQNet,
     get_reachable_states,
     evaluate_policy_on_real_human,
+    # not a rule: the floor under all of them
+    clairvoyant_bound,
 )
 
 
@@ -209,6 +221,15 @@ CONDITION_HATCHES = {c: ("//" if c.endswith("_rails") else None)
 # reads as a reference rather than as one more condition.
 N_B_COLOR = "#37474f"
 N_B_LABEL = "|B| (query set size)"
+
+# The clairvoyant bound L* (bottlenecks.clairvoyant_bound): its column in
+# episodes.csv, and how query_counts_h<H>.png draws it.  |B| is the ceiling of
+# every count and L* the floor, so the two open each subplot side by side; L* is
+# hollow and dashed, so it reads as neither |B| nor a condition, and its dashed
+# line runs on across the conditions for every bar to be read against.
+BOUND = "clairvoyant_bound"
+BOUND_COLOR = "black"
+BOUND_LABEL = "Clairvoyant bound L*"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -663,6 +684,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     instance and is therefore the same for every condition.  The individual
     episodes' own flags are discarded for that reason.
 
+    `row` also carries, under BOUND, the clairvoyant bound L* for the drawn
+    human — the floor under every count in `counts` — and NaN wherever the
+    counts are.
+
     One call is one repetition — main() averages over num_simu of them.
     """
     # The columns this repetition produces, and the stage timers an early return
@@ -707,6 +732,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         # only the stages that never got a chance to run are NaN'd here.
         for stage in ["t_algorithm1"] + unrun_stages:
             row[stage] = float("nan")
+        row[BOUND] = float("nan")
         row["skipped"] = f"{len(B)} bottlenecks > {max_bottlenecks}"
         return row, {c: float("nan") for c in conditions}, float("nan")
 
@@ -731,6 +757,7 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     if n == 0:
         for stage in unrun_stages:
             row[stage] = float("nan")
+        row[BOUND] = float("nan")
         row["skipped"] = "no bottlenecks"
         return row, {c: float("nan") for c in conditions}, float("nan")
 
@@ -808,6 +835,10 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
     # paired: their differences are not polluted by which human was drawn.
     oracle_bottlenecks = list(oracle_sets[np.random.randint(len(oracle_sets))])
 
+    # The floor under every count below, for this same human.  It draws nothing
+    # from the numpy stream, so Random's seeds, drawn next, are untouched.
+    row[BOUND] = clairvoyant_bound(oracle_bottlenecks, I_array, b_to_int)
+
     counts, success = {}, float("nan")
     for name in conditions:
         base = base_of(name)
@@ -836,6 +867,14 @@ def run_instance(T_R, T_H_list, start_state, goal_state, mdp_R=None,
         # instance's property rather than the last condition's.
         if name == base:
             success = flag
+
+    # No rule can beat a policy that knew the answers: a count under L* means a
+    # bug in the bound or in the stopping rule, never a good rule.  Said, not
+    # raised, so one bad episode cannot take a long sweep down.
+    below = [c for c in conditions if counts[c] < row[BOUND]]
+    if below:
+        tqdm.write(f"WARNING: {', '.join(below)} below the clairvoyant bound "
+                   f"L* = {row[BOUND]} — a bug, not a result")
 
     row.setdefault("skipped", "")   # may already hold the VI-skipped note
     return row, counts, success
@@ -1028,13 +1067,17 @@ def column_layout(use_rails=False):
                      "n_I_mean", "n_I_std", "len_I_mean", "len_I_std"]
                     + [f"{c}_{stat}" for c in conditions
                        for stat in ("mean", "std", "mean_success", "mean_failure")]
+                    + [f"{BOUND}_{stat}"
+                       for stat in ("mean", "std", "mean_success", "mean_failure")]
+                    + [f"{c}_bound_mean" for c in conditions]
                     + ["saved_queries", "skipped"])
 
     # One row per repetition: the raw record everything else is derived from.
     # `rep` and `seed` identify it; `success` and the per-condition query counts
     # are what the aggregate query view averages.
+    # The clairvoyant bound follows the counts it is the floor of.
     episode_fields = (CONFIG_KEYS + ["rep", "seed"] + STAGE_SIZES + stage_times
-                      + ["success"] + list(conditions) + ["skipped"])
+                      + ["success"] + list(conditions) + [BOUND] + ["skipped"])
     return conditions, stage_times, episode_fields, time_fields, query_fields
 
 
@@ -1294,6 +1337,7 @@ def main(argv=None):
                 tqdm.write(f"skipping repetition: {note}")
                 row = {f: float("nan") for f in STAGE_SIZES + stage_times}
                 row["n_humans"] = num_humans
+                row[BOUND] = float("nan")
                 row["skipped"] = note
                 counts  = {c: float("nan") for c in conditions}
                 success = float("nan")
@@ -1493,6 +1537,22 @@ def _aggregate_queries(key, reps, counts_per_rep, successes, conditions):
         row[f"{cond}_mean_success"] = _mean_where(vals, successes, 1)
         row[f"{cond}_mean_failure"] = _mean_where(vals, successes, 0)
 
+    # The clairvoyant bound, averaged over the same repetitions and split the
+    # same way, so each mean above has its floor beside it.  NaN on an
+    # episodes.csv written before the column existed.
+    bound = [r.get(BOUND, float("nan")) for r in reps]
+    row[f"{BOUND}_mean"]         = _nanmean(bound)
+    row[f"{BOUND}_std"]          = _nanstd(bound)
+    row[f"{BOUND}_mean_success"] = _mean_where(bound, successes, 1)
+    row[f"{BOUND}_mean_failure"] = _mean_where(bound, successes, 0)
+    # And the floor under each condition's own mean: L* over the repetitions
+    # that condition ran on.  It is BOUND_mean again for every condition but
+    # one skipped on some of them — the VI baseline past --max-exact-n —
+    # whose mean covers fewer repetitions and is floored by L* over those only.
+    for cond, vals in by_cond.items():
+        row[f"{cond}_bound_mean"] = _nanmean(
+            [b for b, v in zip(bound, vals) if not np.isnan(v)])
+
     # Mean of the paired per-repetition differences: queries Strategic Exact
     # saves over Query All against the same human.
     paired = [q - e for e, q in zip(exact_counts, by_cond["query_all"])
@@ -1532,6 +1592,9 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
                         up to three otherwise.  Each subplot opens with |B|,
                         then one bar per condition: Random and the six
                         selection rules, "+ rails" twins hatched.
+                        Between the two sits the clairvoyant bound L*, hollow
+                        and dashed, and its dashed line runs on across the
+                        conditions: the floor none of them can go under.
                         Per-game subplots rather than one shared axis because
                         the games differ by an order of magnitude in |B|, and
                         a shared y-axis flattens the small ones into
@@ -1583,6 +1646,12 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
     # twin; Random gets one too, since it is railed as well, and the VI baseline
     # none.  The same for every figure, so it is built once.
     pair_handles, pair_labels = [Patch(facecolor=N_B_COLOR)], [N_B_LABEL]
+    # L* right after |B|, as the plot has it: its hollow bar and its line.
+    pair_handles.append((Patch(facecolor="none", edgecolor=BOUND_COLOR,
+                               linestyle="--", linewidth=1.0),
+                         Line2D([], [], color=BOUND_COLOR, linestyle="--",
+                                linewidth=1.0)))
+    pair_labels.append(BOUND_LABEL)
     for b in ("query_all",) + BASES:
         shades = (Patch(facecolor=CONDITION_COLORS[b]),)
         if with_rails and b in RAIL_BASES:
@@ -1617,17 +1686,35 @@ def _make_plots(time_rows, query_rows, out_dir, conditions=CONDITIONS):
         # Slot 0 is |B|, the conditions follow: the size of the problem sits
         # next to the counts it bounds.  The legend names every slot, so the
         # x-axis carries no ticks.
-        n_slots = len(conditions) + 1
+        # Slot 1 is L*: the floor of those counts beside their ceiling, so the
+        # conditions start at slot 2.
+        n_slots = len(conditions) + 2
         x = np.arange(n_slots)
         for k, (ax, game) in enumerate(zip(flat, games)):
             r = sub[sub["game"] == game].iloc[0]
             ax.bar(x[0], r["n_B_mean"], 0.8, yerr=r["n_B_std"], capsize=2,
                    color=N_B_COLOR, linewidth=0, label=N_B_LABEL)
-            for i, cond in enumerate(conditions, start=1):
+            ax.bar(x[1], r[f"{BOUND}_mean"], 0.8, yerr=r[f"{BOUND}_std"],
+                   capsize=2, facecolor="none", edgecolor=BOUND_COLOR,
+                   linestyle="--", linewidth=1.0, label=BOUND_LABEL)
+            for i, cond in enumerate(conditions, start=2):
                 ax.bar(x[i], r[f"{cond}_mean"], 0.8, yerr=r[f"{cond}_std"],
                        capsize=2, color=CONDITION_COLORS[cond],
                        hatch=CONDITION_HATCHES[cond], edgecolor="white",
                        linewidth=0, label=CONDITION_LABELS[cond])
+            # The floor carried on across the conditions, over the bars, so
+            # each one reads against it.  At each bar it is L* over the very
+            # repetitions that bar averages: all of them, but for the VI
+            # baseline past --max-exact-n, whose mean covers only the ones
+            # with |B| <= --max-exact-n — there the line steps to their floor,
+            # rather than a floor drawn from all of them passing over the bar.
+            # A condition with no bar at all keeps the line at L*.
+            floor = [r[f"{c}_bound_mean"] if not pd.isna(r[f"{c}_bound_mean"])
+                     else r[f"{BOUND}_mean"] for c in conditions]
+            ax.plot(np.r_[x[1] + 0.4, x[2:], x[-1] + 0.4],
+                    np.r_[r[f"{BOUND}_mean"], floor, floor[-1]],
+                    drawstyle="steps-mid", color=BOUND_COLOR, linestyle="--",
+                    linewidth=1.0, zorder=3)
             ax.set_title(game, fontsize=10)
             ax.set_xticks([])
             # The hypothesis space, as text rather than bars: it is not a query
@@ -1761,6 +1848,9 @@ def write_tables(episodes_path, query_rows, time_rows, out_dir, conditions):
                         Every column that is a mean over the repetitions reads
                         "mean ± std", the std being the population one (ddof=0)
                         over the same repetitions, NaNs left out.
+                        "L*", just before the conditions, is the clairvoyant
+                        bound: the floor under each of them, averaged the
+                        same way.
     query_variance.csv  per configuration, the variance of the query count, VI
                         against H1, with Levene's median-centred p-value
                         (ratio > 1: H1 varies more).  Needs >= 3 episodes per
@@ -1780,6 +1870,7 @@ def write_tables(episodes_path, query_rows, time_rows, out_dir, conditions):
                      "hum": row["num_humans"],
                      "|B|": pm(q["n_B_mean"], q["n_B_std"]),
                      "|Phi|": pm(q["n_I_mean"], q["n_I_std"]),
+                     "L*": pm(q[f"{BOUND}_mean"], q[f"{BOUND}_std"]),
                      **{short[c]: pm(q[f"{c}_mean"], q[f"{c}_std"])
                         for c in conditions},
                      "time(s)": pm(row["t_total"], row["t_total_std"]),
@@ -1813,14 +1904,16 @@ def _print_summary(time_rows, query_rows, conditions=CONDITIONS):
     """One line per configuration — everything shown is a mean over num_simu."""
     short = _short_names()
     header = "".join(f"{short[c]:>8}" for c in conditions)
-    print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B|':>7}{header}{'time(s)':>10}")
+    print(f"\n{'game':<12}{'board':>6}{'hum':>5}{'|B|':>7}{'L*':>7}{header}"
+          f"{'time(s)':>10}")
     for row, q in zip(time_rows, query_rows):
         if q["n_episodes"]:
             queries = "".join(f"{q[f'{c}_mean']:8.2f}" for c in conditions)
         else:
             queries = f"{row['skipped']:>{8 * len(conditions)}}"
         print(f"{row['game']:<12}{str(row['board_side']):>6}{row['num_humans']:>5}"
-              f"{row['n_B']:>7.1f}{queries}{row['t_total']:>10.2f}")
+              f"{row['n_B']:>7.1f}{q[f'{BOUND}_mean']:>7.2f}{queries}"
+              f"{row['t_total']:>10.2f}")
 
 
 if __name__ == "__main__":

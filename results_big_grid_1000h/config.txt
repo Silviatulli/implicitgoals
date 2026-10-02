@@ -1,0 +1,38 @@
+date     2026-10-01T19:50:56
+host     Macmini.lan
+command  uv run python experiment.py --humans 1000 --num-simu 100 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --out-dir /Users/yacine/work/stage_2A/implicitgoals/results_big_grid_1000h_full
+
+resolved arguments (defaults included):
+  --games                  ['gridworld', 'puddleworld', 'rockworld', 'taxiworld']
+  --humans                 [1000]
+  --jobs                   0
+  --max-bottlenecks        inf
+  --max-draws              20
+  --max-exact-n            17
+  --min-hypotheses         3
+  --num-simu               100
+  --obstacle-density       0.05
+  --out-dir                /Users/yacine/work/stage_2A/implicitgoals/results_big_grid_1000h_full
+  --overcooked-allow-drop  False
+  --puddle-density         0.1
+  --rails                  True
+  --rock-density           0.1
+  --room-sides             [10]
+  --rooms-per-side         10
+  --seed                   0
+  --slip-prob              0.0
+  --valuable-rocks         3
+
+gridworld, puddleworld, rockworld from the run that died partway (/Users/yacine/work/stage_2A/implicitgoals/results_big_grid_1000h, clairvoyant_bound NaN there):
+  uv run python experiment.py --humans 1000 --num-simu 100 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --out-dir results_big_grid_1000h
+the other games run as slices of their repetitions (same seeds, so the same episodes as one run):
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 300 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_0
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 310 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_10
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 320 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_20
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 330 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_30
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 340 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_40
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 350 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_50
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 360 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_60
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 370 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_70
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 380 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_80
+  uv run python experiment.py --humans 1000 --rooms-per-side 10 --room-sides 10 --valuable-rocks 3 --rails --games taxiworld --num-simu 10 --seed 390 --out-dir /Volumes/SSD/runs/taxi1000h/slices/taxiworld_90

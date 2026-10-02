@@ -24,6 +24,8 @@ below is the paper's object under the name it goes by here:
     H4bis (H4, argmin)          solve_query_mdp_frequency_min (rule="marginal_min")
     Random baseline             solve_query_mdp_random       (rule="random")
     Ratio (policy_search/)      solve_query_mdp_ratio        (rule="ratio")
+    L*, the clairvoyant bound   clairvoyant_bound — not a rule, see §9
+      (policy_search/, RATIO.md)
 
 Two objects have no name in the paper and are easy to confuse, so they are
 spelled out under Notation below: **B_nofilter** against **B**, and **I_G**, the
@@ -60,6 +62,8 @@ Pipeline
       _random (Random); build_dominance (H2)
       returns a mask, not a policy, because H2 selects nothing  → §7
   6.  evaluate_policy_on_real_human(...)                 → query count per episode
+  7.  clairvoyant_bound(...)                             → L*, the floor under every
+                                                           count of step 6    → §9
 
 B is what the robot may ask about, and the bit order every policy and I_array
 agree on.  It is sorted at step 1 and that order is kept to the end of the
@@ -1666,3 +1670,99 @@ def evaluate_policy_on_real_human(
         "total_reward": total_reward_arr,
         "success":      success_arr,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.  The clairvoyant bound L*   (policy_search/REPORT.md §2, RATIO.md §2.1)
+#
+# Not a condition: it reads the evaluated human's own I_G, which no rule is
+# given.  It is the fewest queries a policy could have needed had it been told
+# I_G and still had to ask its way to §8's stopping test — so no condition,
+# the VI baseline included, can go below it on the same human, and it is the
+# floor under every column of the query counts.  Where |B| puts the VI out of
+# reach, it is the only reference those columns have.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _smallest_hitting_set(D):
+    """Size of the smallest set of columns of `D` meeting every row.
+
+    D : (m, g) bool, one row per set to hit, none of them empty.
+
+    Exact, by iterative deepening.  A set of size `depth` is searched for by
+    branching, level after level, on the unmet row with the fewest columns:
+    every hitting set holds one of them, so no branch is missed, and `depth`
+    only grows past a size that has none.  The cost is exponential in the
+    answer, not in m or g — and on Algorithm 1's hypotheses the answer is 1
+    or 2 (see clairvoyant_bound).
+    """
+    D = np.asarray(D, dtype=bool)
+    if D.shape[0] == 0:
+        return 0
+    if not D.any(1).all():
+        raise ValueError("D has an empty row, which no set of columns meets.")
+
+    def meets(unmet, depth):
+        if not unmet.any():
+            return True
+        if depth == 0:
+            return False
+        rows = np.flatnonzero(unmet)
+        r = rows[D[rows].sum(1).argmin()]           # the tightest unmet row
+        return any(meets(unmet & ~D[:, j], depth - 1)
+                   for j in np.flatnonzero(D[r]))
+
+    depth = 1
+    while not meets(np.ones(D.shape[0], dtype=bool), depth):
+        depth += 1
+    return depth
+
+
+def clairvoyant_bound(true_bottlenecks, I_array, b_to_int):
+    """L*(I_G) — the fewest queries any policy could need against this human,
+    even one that knew I_G beforehand.
+
+    Knowing the answers does not exempt a policy from asking: an episode ends
+    only at §8's absorbing test, and the answers are the human's own — YES iff
+    the bottleneck is in I_G.  So L* is the size of the smallest query set
+    whose answers make _terminal fire, and no condition can do better against
+    the same human, episode by episode.  Two cases, the same split as the
+    episode's `success` flag:
+
+      compatible, I_G ⊆ ϕ_k for some k — success is the only way out.  It
+          needs T_k = B ∖ ϕ_k ⊆ K_not for some k: a NO on every bit of T_k,
+          which the human gives only if T_k ∩ I_G = ∅, i.e. I_G ⊆ ϕ_k.  Asking
+          that certificate alone, in any order, reaches it, hence
+
+              L* = min over {k : I_G ⊆ ϕ_k} of |B ∖ ϕ_k|.
+
+      incompatible — failure is the only way out.  It needs a set of YES
+          answers, S ⊆ I_G, contained in no ϕ_k; L* is the smallest such S,
+          a minimum hitting set of the sets I_G ∖ ϕ_k, computed exactly by
+          _smallest_hitting_set.  On Algorithm 1's Φ — every maximal clique of
+          the comparability graph through the goal, which I_G always holds —
+          it is 1 when a bit of I_G lies in no ϕ_k, and 2 otherwise: some two
+          bits of I_G are then incomparable.
+
+    policy_search/policies.py's clairvoyant_bound computes the same number,
+    except that it estimates the incompatible case greedily.
+
+    Parameters — those of evaluate_policy_on_real_human, read the same way:
+    true_bottlenecks : the evaluated human's bottleneck identifiers; those
+                       absent from b_to_int are outside the query set, and
+                       dropped.
+    I_array          : (len(I), n) bool — row k is ϕ_k in B's bit order.
+    b_to_int         : {bottleneck: column index} — bottleneck_index(B).
+
+    Returns an int.  It is 0 when the empty knowledge state is already
+    absorbing, as _run_query_episode bills it: B inside some ϕ_k, or no
+    hypothesis at all.
+    """
+    A = np.asarray(I_array, dtype=bool)
+    G = np.zeros(A.shape[1], dtype=bool)
+    for b in true_bottlenecks:
+        if _as_label(b) in b_to_int:
+            G[b_to_int[_as_label(b)]] = True
+    compatible = ~(G[None, :] & ~A).any(1)                  # I_G ⊆ ϕ_k
+    if compatible.any():
+        return int((~A[compatible]).sum(1).min())
+    return _smallest_hitting_set(G[None, :] & ~A)           # rows: I_G ∖ ϕ_k

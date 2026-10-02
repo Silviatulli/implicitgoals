@@ -1,6 +1,6 @@
-date     2026-09-30T13:07:24
+date     2026-10-01T09:43:09
 host     Macmini.lan
-command  uv run python experiment.py --humans 20 --num-simu 50 --rooms-per-side 5 --room-sides 5 --valuable-rocks 3 --rails --max-bottlenecks 17 --out-dir results_with_vi
+command  uv run python experiment.py --humans 20 --num-simu 50 --rooms-per-side 5 --room-sides 5 --valuable-rocks 3 --rails --max-bottlenecks 17 --out-dir results_clairvoyant/results_with_vi
 
 resolved arguments (defaults included):
   --games                  ['gridworld', 'puddleworld', 'rockworld', 'taxiworld']
@@ -12,7 +12,7 @@ resolved arguments (defaults included):
   --min-hypotheses         3
   --num-simu               50
   --obstacle-density       0.05
-  --out-dir                results_with_vi
+  --out-dir                results_clairvoyant/results_with_vi
   --overcooked-allow-drop  False
   --puddle-density         0.1
   --rails                  True
